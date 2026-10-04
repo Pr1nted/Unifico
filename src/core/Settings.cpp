@@ -23,6 +23,7 @@ void Settings::load() {
     accent = (int)ujson::num(j, "accent", 0xC9A227) & 0xFFFFFF;
     accentFromGame = ujson::flag(j, "accentFromGame", false);
     fullscreen = ujson::flag(j, "fullscreen", false);
+    feedbackInstall = ujson::str(j, "feedbackInstall");
     launch.clear();
     if (j.contains("launch") && j["launch"].is_object()) {
         for (auto& [tag, o] : j["launch"].items()) {
@@ -57,6 +58,7 @@ void Settings::save() const {
     j["accent"] = accent;
     j["accentFromGame"] = accentFromGame;
     j["fullscreen"] = fullscreen;
+    if (!feedbackInstall.empty()) j["feedbackInstall"] = feedbackInstall;
     j["launch"] = json::object();
     for (auto& [tag, lo] : launch)
         j["launch"][tag] = {{"args", lo.args}, {"env", lo.env}, {"memoryLimitMB", lo.memoryLimitMB}, {"console", lo.console}};

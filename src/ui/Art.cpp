@@ -180,7 +180,7 @@ void hero(Rectangle r, int which, float t) {
             DrawCircleGradient((int)cx, (int)(r.y + r.height * 0.45f), r.height * 0.9f, Color{232, 228, 218, 12}, BLANK);
         }
         vignette(r, 0.85f);
-        EndScissorMode();
+        ui::endScissor();
     }
 }
 
@@ -206,7 +206,7 @@ void banner(Rectangle r, int seed, float t) {
     compass(r.x + r.width - r.height * 0.6f, r.y + r.height * 0.5f, r.height * 0.42f, t + seed, theme::accentA(70));
     DrawRectangleGradientH((int)r.x, (int)r.y, (int)(r.width * 0.6f), (int)r.height, Color{9, 11, 17, 230}, BLANK);
     DrawRectangle((int)r.x, (int)(r.y + r.height - 1), (int)r.width, 1, theme::rule);
-    EndScissorMode();
+    ui::endScissor();
 }
 
 void compass(float cx, float cy, float rad, float t, Color c) {
@@ -288,7 +288,7 @@ void gameCard(Rectangle r, Game g, bool active, float t) {
             break;
     }
     DrawRectangleGradientV((int)r.x, (int)(r.y + r.height * 0.45f), (int)r.width, (int)(r.height * 0.55f) + 1, BLANK, Color{9, 11, 17, 235});
-    EndScissorMode();
+    ui::endScissor();
     DrawRectangleRoundedLinesEx(r, 0.12f, 8, active ? 2.0f : 1.0f, active ? theme::gold : theme::rule);
 }
 }  // namespace art

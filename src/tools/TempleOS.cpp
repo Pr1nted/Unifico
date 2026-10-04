@@ -7,6 +7,9 @@
 #include "core/Zip.h"
 #include "od/Releases.h"
 
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
@@ -25,126 +28,198 @@
 
 namespace fs = std::filesystem;
 
+#ifndef N_
+#define N_(s) s   // marked for the translator; drawn through T() on the page
+#endif
+
 namespace utemple {
 namespace {
 const int kMonitorPort = 45454;
 std::string home() { return upaths::gamesDir() + "/templeos"; }
 std::string isoPath() { return home() + "/TempleOS.ISO"; }
 std::string payloadDir() { return home() + "/payload"; }
-std::string payloadIso() { return home() + "/payload.iso"; }
+std::string diskPath() { return home() + "/game-disk.img"; }
+}  // namespace
 
-// ---- ISO9660, the smallest correct one ----------------------------------
-void both16(std::vector<uint8_t>& b, size_t at, uint16_t v) {
-    b[at] = v & 0xFF; b[at + 1] = v >> 8; b[at + 2] = v >> 8; b[at + 3] = v & 0xFF;
-}
-void both32(std::vector<uint8_t>& b, size_t at, uint32_t v) {
-    for (int i = 0; i < 4; ++i) { b[at + i] = (v >> (8 * i)) & 0xFF; b[at + 7 - i] = (v >> (8 * i)) & 0xFF; }
-}
-void str(std::vector<uint8_t>& b, size_t at, const std::string& s, size_t len) {
-    for (size_t i = 0; i < len; ++i) b[at + i] = i < s.size() ? (uint8_t)s[i] : ' ';
-}
-std::string isoName(const std::string& in) {
-    std::string out;
-    for (char c : in) {
-        char u = (char)toupper((unsigned char)c);
-        out += (isalnum((unsigned char)u) || u == '.' || u == '_') ? u : '_';
+// ---- FAT32, the disk TempleOS can actually read ------------------------
+//
+// TempleOS 5.03 reads its own RedSea format and FAT32, and nothing else: a
+// second CD in ordinary ISO9660 mounts (as U:) and then answers every request
+// with "File System Not Supported". So the game travels on a small FAT32 hard
+// disk, laid out the way macOS's own `hdiutil -fs "MS-DOS FAT32"` lays one
+// out, which is the layout first proven to work in the guest: an MBR with one
+// type-0x0B partition at LBA 1, 512-byte sectors and clusters, two FATs, the
+// root directory at cluster 2. Mixed-case names carry long-name entries.
+namespace {
+void le16(std::vector<uint8_t>& b, size_t at, uint16_t v) { b[at] = v & 0xFF; b[at + 1] = v >> 8; }
+void le32(std::vector<uint8_t>& b, size_t at, uint32_t v) { for (int i = 0; i < 4; ++i) b[at + i] = (v >> (8 * i)) & 0xFF; }
+
+/** The 8.3 name, padded to 11, made unique with ~N when it had to be cut. */
+std::string shortName(const std::string& name, std::vector<std::string>& taken, bool* lossy) {
+    auto clean = [](const std::string& in, size_t max, bool& cut) {
+        std::string o;
+        for (char c : in) {
+            const char u = (char)toupper((unsigned char)c);
+            if (isalnum((unsigned char)u) || u == '_' || u == '-' || u == '~') o += u;
+            else cut = true;
+        }
+        if (o.size() > max) { o.resize(max); cut = true; }
+        return o;
+    };
+    const size_t dot = name.rfind('.');
+    std::string base = dot == std::string::npos ? name : name.substr(0, dot);
+    std::string ext = dot == std::string::npos ? "" : name.substr(dot + 1);
+    bool cut = false;
+    std::string b = clean(base, 8, cut), e = clean(ext, 3, cut);
+    if (b.empty()) { b = "FILE"; cut = true; }
+    *lossy = cut;
+    auto pack = [](std::string bb, std::string ee) { bb.resize(8, ' '); ee.resize(3, ' '); return bb + ee; };
+    std::string sn = pack(b, e);
+    for (int n = 1; cut || std::find(taken.begin(), taken.end(), sn) != taken.end(); ++n) {
+        const std::string tail = "~" + std::to_string(n);
+        sn = pack(b.substr(0, 8 - tail.size()) + tail, e);
+        cut = false;
+        if (std::find(taken.begin(), taken.end(), sn) == taken.end()) break;
     }
-    return out.substr(0, 30);
-}
-std::vector<uint8_t> dirRecord(uint32_t lba, uint32_t size, bool dir, const std::string& id) {
-    const size_t n = id.size();
-    size_t len = 33 + n + ((n % 2 == 0) ? 1 : 0);
-    std::vector<uint8_t> r(len, 0);
-    r[0] = (uint8_t)len;
-    both32(r, 2, lba);
-    both32(r, 10, size);
-    std::time_t t = std::time(nullptr);
-    std::tm* g = std::gmtime(&t);
-    r[18] = (uint8_t)g->tm_year; r[19] = (uint8_t)(g->tm_mon + 1); r[20] = (uint8_t)g->tm_mday;
-    r[21] = (uint8_t)g->tm_hour; r[22] = (uint8_t)g->tm_min; r[23] = (uint8_t)g->tm_sec;
-    r[25] = dir ? 2 : 0;
-    both16(r, 28, 1);
-    r[32] = (uint8_t)n;
-    std::memcpy(&r[33], id.data(), n);
-    return r;
+    taken.push_back(sn);
+    return sn;
 }
 }  // namespace
 
-bool writeIso(const std::string& srcDir, const std::string& out, const std::string& volume, std::string* error) {
-    // Layout: 16 system sectors, PVD (16), terminator (17), L path table (18),
-    // M path table (19), root directory (20), one subdirectory (21..), files.
-    struct F { std::string name; std::string path; uint32_t size; uint32_t lba; };
+bool writeFat32(const std::string& srcDir, const std::string& out, const std::string& volume, std::string* error) {
+    const uint32_t S = 512, start = 1, total = 131070, rsvd = 32;
+    // Clusters left once the FATs are paid for; solve for the FAT size.
+    uint32_t fatSz = 1;
+    for (int i = 0; i < 8; ++i) {
+        const uint32_t clusters = total - rsvd - 2 * fatSz;
+        fatSz = ((clusters + 2) * 4 + S - 1) / S;
+    }
+    const uint32_t dataLba = rsvd + 2 * fatSz;   // relative to the partition
+    const uint32_t clusters = total - dataLba;
+
+    struct F { std::string name, path; uint32_t size, first = 0; };
     std::vector<F> files;
     std::error_code ec;
-    const std::string sub = isoName(fs::path(srcDir).filename().string().empty() ? "FILES" : fs::path(srcDir).filename().string());
     for (auto& e : fs::directory_iterator(srcDir, ec))
-        if (e.is_regular_file(ec)) files.push_back({isoName(e.path().filename().string()), e.path().string(), (uint32_t)e.file_size(ec), 0});
-    const uint32_t S = 2048;
-    // The subdirectory's extent: ".", "..", then one record per file.
-    size_t subBytes = 34 + 34;
-    for (auto& f : files) subBytes += 33 + f.name.size() + 2 + ((f.name.size() + 2) % 2 == 0 ? 1 : 0);
-    const uint32_t subSectors = (uint32_t)((subBytes + S - 1) / S);
-    uint32_t lba = 21 + subSectors;
-    for (auto& f : files) { f.lba = lba; lba += (f.size + S - 1) / S; if (f.size == 0) lba += 0; }
-    const uint32_t total = lba;
+        if (e.is_regular_file(ec)) files.push_back({e.path().filename().string(), e.path().string(), (uint32_t)e.file_size(ec)});
+    std::sort(files.begin(), files.end(), [](const F& a, const F& b) { return a.name < b.name; });
 
-    std::vector<uint8_t> img((size_t)total * S, 0);
-    // PVD
-    size_t p = 16 * S;
-    img[p] = 1; std::memcpy(&img[p + 1], "CD001", 5); img[p + 6] = 1;
-    { std::vector<uint8_t> v(img.begin(), img.end()); }
-    auto put = [&](size_t at, const std::vector<uint8_t>& r) { std::memcpy(&img[at], r.data(), r.size()); };
-    std::vector<uint8_t> tmp(8, 0);
-    str(img, p + 8, "", 32);
-    str(img, p + 40, isoName(volume), 32);
-    { std::vector<uint8_t> b(8); both32(b, 0, total); std::memcpy(&img[p + 80], b.data(), 8); }
-    { std::vector<uint8_t> b(4); both16(b, 0, 1); std::memcpy(&img[p + 120], b.data(), 4); std::memcpy(&img[p + 124], b.data(), 4); }
-    { std::vector<uint8_t> b(4); both16(b, 0, (uint16_t)S); std::memcpy(&img[p + 128], b.data(), 4); }
-    // Path table: root (dir 1) and the subdirectory (dir 2, parent 1).
-    std::vector<uint8_t> pt;
-    auto ptRec = [&](const std::string& id, uint32_t extent, uint16_t parent, bool bigEndian) {
-        std::vector<uint8_t> r(8 + id.size() + (id.size() % 2), 0);
-        r[0] = (uint8_t)id.size();
-        for (int i = 0; i < 4; ++i) r[2 + i] = bigEndian ? (extent >> (24 - 8 * i)) & 0xFF : (extent >> (8 * i)) & 0xFF;
-        r[6] = bigEndian ? parent >> 8 : parent & 0xFF;
-        r[7] = bigEndian ? parent & 0xFF : parent >> 8;
-        std::memcpy(&r[8], id.data(), id.size());
-        return r;
+    // The root directory's entries first, so its size is known.
+    std::vector<uint8_t> root;
+    auto entry = [&](const std::string& n11, uint8_t attr, uint32_t cluster, uint32_t size) {
+        std::vector<uint8_t> e(32, 0);
+        std::memcpy(&e[0], n11.data(), 11);
+        e[11] = attr;
+        std::time_t t = std::time(nullptr);
+        std::tm* g = std::localtime(&t);
+        const uint16_t tm = (uint16_t)((g->tm_hour << 11) | (g->tm_min << 5) | (g->tm_sec / 2));
+        const uint16_t dt = (uint16_t)(((g->tm_year - 80) << 9) | ((g->tm_mon + 1) << 5) | g->tm_mday);
+        le16(e, 14, tm); le16(e, 16, dt); le16(e, 18, dt); le16(e, 22, tm); le16(e, 24, dt);
+        le16(e, 20, (uint16_t)(cluster >> 16)); le16(e, 26, (uint16_t)(cluster & 0xFFFF));
+        le32(e, 28, size);
+        return e;
     };
-    std::vector<uint8_t> L, M;
-    for (bool be : {false, true}) {
-        auto& t = be ? M : L;
-        auto a = ptRec(std::string(1, '\0'), 20, 1, be);
-        auto b = ptRec(sub, 21, 1, be);
-        t.insert(t.end(), a.begin(), a.end());
-        t.insert(t.end(), b.begin(), b.end());
+    std::string vol = volume.substr(0, 11);
+    for (auto& c : vol) c = (char)toupper((unsigned char)c);
+    vol.resize(11, ' ');
+    { auto v = entry(vol, 0x08, 0, 0); root.insert(root.end(), v.begin(), v.end()); }
+
+    // Allocate: root at cluster 2, files contiguous after it.
+    std::vector<std::string> taken;
+    std::vector<std::pair<size_t, std::string>> names;   // index into files, 11-char short name
+    for (size_t i = 0; i < files.size(); ++i) { bool lossy = false; names.push_back({i, shortName(files[i].name, taken, &lossy)}); }
+    size_t rootBytes = 32;
+    for (auto& [i, sn] : names) {
+        const std::string& n = files[i].name;
+        bool mixed = false;
+        std::string up;
+        for (char c : n) up += (char)toupper((unsigned char)c);
+        std::string fromShort = sn.substr(0, 8);
+        while (!fromShort.empty() && fromShort.back() == ' ') fromShort.pop_back();
+        std::string ex = sn.substr(8);
+        while (!ex.empty() && ex.back() == ' ') ex.pop_back();
+        if (!ex.empty()) fromShort += "." + ex;
+        mixed = n != fromShort;
+        rootBytes += 32 + (mixed ? 32 * ((n.size() + 12) / 13) : 0);
     }
-    { std::vector<uint8_t> b(8); both32(b, 0, (uint32_t)L.size()); std::memcpy(&img[p + 132], b.data(), 8); }
-    img[p + 140] = 18; // L table LBA, little-endian
-    img[p + 148 + 3] = 19; // M table LBA, big-endian
-    put(p + 156, dirRecord(20, S, true, std::string(1, '\0')));
-    str(img, p + 190, "", 128); str(img, p + 318, "UNIFICO", 128); str(img, p + 446, "UNIFICO", 128); str(img, p + 574, "OPEN DOCTRINES", 128);
-    str(img, p + 702, "", 37); str(img, p + 739, "", 37); str(img, p + 776, "", 37);
-    for (int k = 0; k < 4; ++k) { str(img, p + 813 + k * 17, "0000000000000000", 16); img[p + 813 + k * 17 + 16] = 0; }
-    img[p + 881] = 1;
-    // Terminator
-    img[17 * S] = 255; std::memcpy(&img[17 * S + 1], "CD001", 5); img[17 * S + 6] = 1;
-    std::memcpy(&img[18 * S], L.data(), L.size());
-    std::memcpy(&img[19 * S], M.data(), M.size());
-    // Root directory
-    size_t at = 20 * S;
-    for (auto& r : {dirRecord(20, S, true, std::string(1, '\0')), dirRecord(20, S, true, std::string(1, '\1')),
-                    dirRecord(21, subSectors * S, true, sub)}) { put(at, r); at += r.size(); }
-    // Subdirectory: records never straddle a sector.
-    at = 21 * S;
-    for (auto& r : {dirRecord(21, subSectors * S, true, std::string(1, '\0')), dirRecord(20, S, true, std::string(1, '\1'))}) { put(at, r); at += r.size(); }
+    const uint32_t rootClusters = (uint32_t)((rootBytes + S - 1) / S);
+    uint32_t next = 2 + rootClusters;
     for (auto& f : files) {
-        auto r = dirRecord(f.lba, f.size, false, f.name + ";1");
-        if ((at % S) + r.size() > S) at = (at / S + 1) * S;
-        put(at, r);
-        at += r.size();
+        const uint32_t n = std::max<uint32_t>(1, (f.size + S - 1) / S);
+        f.first = f.size ? next : 0;
+        if (f.size) next += n;
+    }
+    if (next >= clusters + 2) { if (error) *error = "the game does not fit on the disk"; return false; }
+
+    for (auto& [i, sn] : names) {
+        const F& f = files[i];
+        std::string fromShort = sn.substr(0, 8);
+        while (!fromShort.empty() && fromShort.back() == ' ') fromShort.pop_back();
+        std::string ex = sn.substr(8);
+        while (!ex.empty() && ex.back() == ' ') ex.pop_back();
+        if (!ex.empty()) fromShort += "." + ex;
+        if (f.name != fromShort) {
+            uint8_t sum = 0;
+            for (int k = 0; k < 11; ++k) sum = (uint8_t)(((sum & 1) << 7) + (sum >> 1) + (uint8_t)sn[k]);
+            const int parts = (int)((f.name.size() + 12) / 13);
+            for (int p = parts; p >= 1; --p) {
+                std::vector<uint8_t> e(32, 0xFF);
+                e[0] = (uint8_t)(p | (p == parts ? 0x40 : 0));
+                e[11] = 0x0F; e[12] = 0; e[13] = sum; e[26] = 0; e[27] = 0;
+                static const int pos[13] = {1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30};
+                for (int k = 0; k < 13; ++k) {
+                    const size_t ci = (size_t)(p - 1) * 13 + k;
+                    uint16_t ch = ci < f.name.size() ? (uint8_t)f.name[ci] : (ci == f.name.size() ? 0 : 0xFFFF);
+                    le16(e, pos[k], ch);
+                }
+                root.insert(root.end(), e.begin(), e.end());
+            }
+        }
+        auto e = entry(sn, 0x20, f.first, f.size);
+        root.insert(root.end(), e.begin(), e.end());
+    }
+
+    std::vector<uint8_t> img((size_t)(start + total) * S, 0);
+    // MBR
+    img[0x1BE + 4] = 0x0B;
+    { std::vector<uint8_t> t(8); le32(t, 0, start); le32(t, 4, total); std::memcpy(&img[0x1BE + 8], t.data(), 8); }
+    img[0x1BE + 1] = 0xFE; img[0x1BE + 2] = 0xFF; img[0x1BE + 3] = 0xFF;
+    img[0x1BE + 5] = 0xFE; img[0x1BE + 6] = 0xFF; img[0x1BE + 7] = 0xFF;
+    img[510] = 0x55; img[511] = 0xAA;
+    // Boot sector
+    std::vector<uint8_t> bs(S, 0);
+    bs[0] = 0xEB; bs[1] = 0x58; bs[2] = 0x90;
+    std::memcpy(&bs[3], "UNIFICO ", 8);
+    le16(bs, 11, (uint16_t)S); bs[13] = 1; le16(bs, 14, (uint16_t)rsvd); bs[16] = 2;
+    bs[21] = 0xF8; le16(bs, 24, 63); le16(bs, 26, 255); le32(bs, 28, start); le32(bs, 32, total);
+    le32(bs, 36, fatSz); le32(bs, 44, 2); le16(bs, 48, 1); le16(bs, 50, 6);
+    bs[64] = 0x80; bs[66] = 0x29; le32(bs, 67, (uint32_t)std::time(nullptr));
+    std::memcpy(&bs[71], vol.data(), 11); std::memcpy(&bs[82], "FAT32   ", 8);
+    bs[510] = 0x55; bs[511] = 0xAA;
+    std::vector<uint8_t> fsi(S, 0);
+    le32(fsi, 0, 0x41615252); le32(fsi, 484, 0x61417272);
+    le32(fsi, 488, clusters - (next - 2)); le32(fsi, 492, next); le32(fsi, 508, 0xAA550000);
+    auto at = [&](uint32_t lba) { return (size_t)(start + lba) * S; };
+    std::memcpy(&img[at(0)], bs.data(), S); std::memcpy(&img[at(1)], fsi.data(), S);
+    std::memcpy(&img[at(6)], bs.data(), S); std::memcpy(&img[at(7)], fsi.data(), S);
+    // FATs
+    std::vector<uint8_t> fat((size_t)fatSz * S, 0);
+    le32(fat, 0, 0x0FFFFFF8); le32(fat, 4, 0x0FFFFFFF);
+    auto chain = [&](uint32_t first, uint32_t n) {
+        for (uint32_t c = first; c < first + n; ++c) le32(fat, (size_t)c * 4, c + 1 < first + n ? c + 1 : 0x0FFFFFFF);
+    };
+    chain(2, rootClusters);
+    for (auto& f : files) if (f.size) chain(f.first, (f.size + S - 1) / S);
+    std::memcpy(&img[at(rsvd)], fat.data(), fat.size());
+    std::memcpy(&img[at(rsvd + fatSz)], fat.data(), fat.size());
+    // Data
+    auto clusterAt = [&](uint32_t c) { return at(dataLba + (c - 2)); };
+    std::memcpy(&img[clusterAt(2)], root.data(), root.size());
+    for (auto& f : files) {
+        if (!f.size) continue;
         std::ifstream in(f.path, std::ios::binary);
-        in.read((char*)&img[(size_t)f.lba * S], f.size);
+        in.read((char*)&img[clusterAt(f.first)], f.size);
+        if (!in) { if (error) *error = "could not read " + f.path; return false; }
     }
     std::ofstream o(out, std::ios::binary | std::ios::trunc);
     o.write((const char*)img.data(), (std::streamsize)img.size());
@@ -155,9 +230,35 @@ bool writeIso(const std::string& srcDir, const std::string& out, const std::stri
 std::string qemu() {
     std::string q = uproc::which("qemu-system-x86_64");
 #if defined(_WIN32)
-    if (q.empty() && ufs::exists("C:\\Program Files\\qemu\\qemu-system-x86_64.exe")) q = "C:\\Program Files\\qemu\\qemu-system-x86_64.exe";
+    for (const char* c : {"C:\\Program Files\\qemu\\qemu-system-x86_64.exe", "C:\\Program Files (x86)\\qemu\\qemu-system-x86_64.exe"})
+        if (q.empty() && ufs::exists(c)) q = c;
+#else
+    // A launcher opened from the desktop does not get the shell's PATH, so the
+    // usual package-manager homes are looked in by name as well.
+    for (const char* c : {"/opt/homebrew/bin/qemu-system-x86_64", "/usr/local/bin/qemu-system-x86_64",
+                          "/opt/local/bin/qemu-system-x86_64", "/usr/bin/qemu-system-x86_64", "/usr/pkg/bin/qemu-system-x86_64"})
+        if (q.empty() && ufs::exists(c)) q = c;
 #endif
     return q;
+}
+
+QemuStatus qemuStatus() {
+    // Asked once per run: whether it exists AND starts. A copy that is present
+    // but broken (a half-finished Homebrew upgrade, a missing library) should
+    // say so here rather than as an emulator window that never appears.
+    static QemuStatus cached;
+    static bool asked = false;
+    if (asked && cached.ok) return cached;
+    asked = true;
+    cached = QemuStatus{};
+    cached.path = qemu();
+    if (cached.path.empty()) { cached.problem = qemuHelp(); return cached; }
+    if (uproc::runQuiet(cached.path, {"--version"}) != 0) {
+        cached.problem = "QEMU is installed at " + cached.path + " but does not start. Reinstall it.";
+        return cached;
+    }
+    cached.ok = true;
+    return cached;
 }
 
 std::string qemuHelp() {
@@ -174,7 +275,7 @@ std::string qemuHelp() {
 #endif
 }
 
-bool ready() { return ufs::exists(isoPath()) && ufs::exists(payloadIso()); }
+bool ready() { return ufs::exists(isoPath()) && ufs::exists(payloadDir() + "/ODGame.HC"); }
 
 JobPtr prepare() {
     return ujobs::run("Preparing TempleOS", [](Job& job) {
@@ -201,39 +302,32 @@ JobPtr prepare() {
         }
         ufs::removeAll(payloadDir());
         if (!uzip::extract(zip, home() + "/unpacked", false, nullptr, &err)) { job.fail(err); return false; }
-        // The release is templeos/<files>; the CD carries that one folder.
+        // The release is templeos/<files>; the disk carries that one folder's files.
         std::string src = home() + "/unpacked/templeos";
         if (!ufs::isDir(src)) src = home() + "/unpacked";
         fs::rename(src, payloadDir(), ec);
         ufs::removeAll(home() + "/unpacked");
-        job.setStatus("Building the game CD...");
-        fs::remove(payloadIso(), ec);
-        bool made = false;
-#if defined(__APPLE__)
-        made = uproc::runQuiet("/usr/bin/hdiutil", {"makehybrid", "-iso", "-joliet", "-default-volume-name", "ODPAYLOAD",
-                                                    "-o", payloadIso(), payloadDir()}) == 0;
-#else
-        for (const char* tool : {"xorriso", "mkisofs", "genisoimage"}) {
-            std::string t = uproc::which(tool);
-            if (t.empty()) continue;
-            std::vector<std::string> args = std::string(tool) == "xorriso"
-                ? std::vector<std::string>{"-as", "mkisofs", "-J", "-V", "ODPAYLOAD", "-o", payloadIso(), payloadDir()}
-                : std::vector<std::string>{"-J", "-V", "ODPAYLOAD", "-o", payloadIso(), payloadDir()};
-            if (uproc::runQuiet(t, args) == 0) { made = true; break; }
-        }
-#endif
-        if (!made && !writeIso(payloadDir(), payloadIso(), "ODPAYLOAD", &err)) { job.fail(err); return false; }
+        fs::remove(home() + "/payload.iso", ec);   // the old, unreadable CD
+        job.setStatus("Building the game disk...");
+        if (!writeFat32(payloadDir(), diskPath(), "ODGAME", &err)) { job.fail(err); return false; }
         return true;
     });
 }
 
 std::unique_ptr<uproc::Child> boot(std::string* error) {
-    const std::string q = qemu();
-    if (q.empty()) { if (error) *error = qemuHelp(); return nullptr; }
+    const QemuStatus qs = qemuStatus();
+    if (!qs.ok) { if (error) *error = qs.problem; return nullptr; }
+    // Rebuilt at every boot: it takes a moment, and it means a disk the guest
+    // wrote to (answering "y" to the installer, say) never outlives the run.
+    std::string err;
+    if (!writeFat32(payloadDir(), diskPath(), "ODGAME", &err)) { if (error) *error = err; return nullptr; }
     uproc::Spec s;
-    s.exe = q;
-    s.args = {"-m", "1024", "-cdrom", isoPath(),
-              "-drive", "file=" + payloadIso() + ",format=raw,if=ide,index=3,media=cdrom",
+    s.exe = qs.path;
+    // The game disk is the primary master, which Mount offers as drive 1; the
+    // live CD is the secondary master, as TempleOS's own install expects.
+    s.args = {"-m", "1024",
+              "-drive", "file=" + diskPath() + ",format=raw,if=ide,index=0",
+              "-drive", "file=" + isoPath() + ",format=raw,if=ide,index=2,media=cdrom",
               "-boot", "d", "-monitor", "tcp:127.0.0.1:" + std::to_string(kMonitorPort) + ",server,nowait",
               "-name", "Open Doctrines on TempleOS"};
 #if defined(__linux__)
@@ -248,43 +342,44 @@ std::unique_ptr<uproc::Child> boot(std::string* error) {
     return c;
 }
 
-bool sendKeys(const std::vector<std::string>& keys) {
+namespace {
+#if defined(_WIN32)
+using Sock = SOCKET;
+void sockClose(Sock s) { closesocket(s); }
+void napMs(int ms) { Sleep(ms); }
+#else
+using Sock = int;
+void sockClose(Sock s) { close(s); }
+void napMs(int ms) { usleep(ms * 1000); }
+#endif
+
+/** Send monitor commands, one connection, `gapMs` between them. */
+bool monitor(const std::vector<std::string>& lines, int gapMs) {
 #if defined(_WIN32)
     static bool wsa = false;
     if (!wsa) { WSADATA d; WSAStartup(MAKEWORD(2, 2), &d); wsa = true; }
 #endif
-    int fd = (int)socket(AF_INET, SOCK_STREAM, 0);
+    Sock fd = socket(AF_INET, SOCK_STREAM, 0);
+#if defined(_WIN32)
+    if (fd == INVALID_SOCKET) return false;
+#else
     if (fd < 0) return false;
+#endif
     sockaddr_in a{};
     a.sin_family = AF_INET;
     a.sin_port = htons(kMonitorPort);
     inet_pton(AF_INET, "127.0.0.1", &a.sin_addr);
-    if (connect(fd, (sockaddr*)&a, sizeof a) != 0) {
-#if defined(_WIN32)
-        closesocket(fd);
-#else
-        close(fd);
-#endif
-        return false;
-    }
-    for (auto& k : keys) {
-        std::string line = "sendkey " + k + "\n";
+    if (connect(fd, (sockaddr*)&a, sizeof a) != 0) { sockClose(fd); return false; }
+    for (auto& l : lines) {
+        const std::string line = l + "\n";
         send(fd, line.c_str(), (int)line.size(), 0);
-#if defined(_WIN32)
-        Sleep(80);
-#else
-        usleep(80000);
-#endif
+        napMs(gapMs);
     }
-#if defined(_WIN32)
-    closesocket(fd);
-#else
-    close(fd);
-#endif
+    sockClose(fd);
     return true;
 }
 
-bool typeText(const std::string& text) {
+std::vector<std::string> keysFor(const std::string& text) {
     // The same table templeos/vm.sh uses: QEMU key names, shift for the rest.
     std::vector<std::string> keys;
     for (char c : text) {
@@ -311,15 +406,152 @@ bool typeText(const std::string& text) {
             default: break;
         }
     }
-    return sendKeys(keys);
+    return keys;
 }
 
-std::vector<Step> steps(const std::string& drive) {
-    const std::string d = drive.empty() ? "T" : drive.substr(0, 1);
+/** The framebuffer as 8-bit grey, from QEMU's screendump. Empty on failure. */
+struct Frame { int w = 0, h = 0; std::vector<uint8_t> grey; };
+Frame grab() {
+    const std::string path = (fs::temp_directory_path() / "unifico-templeos.ppm").string();
+    std::error_code ec;
+    fs::remove(path, ec);
+    std::string quoted;
+    for (char c : path) { if (c == '"' || c == '\\') quoted += '\\'; quoted += c; }
+    if (!monitor({"screendump \"" + quoted + "\""}, 50)) return {};
+    // Written asynchronously: wait until the file stops growing.
+    uintmax_t last = 0;
+    for (int i = 0; i < 40; ++i) {
+        napMs(150);
+        const uintmax_t n = fs::exists(path, ec) ? fs::file_size(path, ec) : 0;
+        if (n > 0 && n == last) break;
+        last = n;
+    }
+    std::string d;
+    if (!ufs::readFile(path, d) || d.size() < 16 || d[0] != 'P' || d[1] != '6') return {};
+    size_t p = 2;
+    auto num = [&]() {
+        while (p < d.size() && (isspace((unsigned char)d[p]) || d[p] == '#')) {
+            if (d[p] == '#') while (p < d.size() && d[p] != '\n') ++p;
+            else ++p;
+        }
+        int v = 0;
+        while (p < d.size() && isdigit((unsigned char)d[p])) v = v * 10 + (d[p++] - '0');
+        return v;
+    };
+    Frame f;
+    f.w = num(); f.h = num();
+    num();
+    ++p;
+    if (f.w <= 0 || f.h <= 0 || d.size() < p + (size_t)f.w * f.h * 3) return {};
+    f.grey.resize((size_t)f.w * f.h);
+    for (size_t i = 0; i < f.grey.size(); ++i) {
+        const uint8_t* px = (const uint8_t*)&d[p + i * 3];
+        f.grey[i] = (uint8_t)((px[0] * 3 + px[1] * 6 + px[2]) / 10);
+    }
+    return f;
+}
+
+/** Pixels that differ noticeably, ignoring the title bar's ticking clock. */
+int changed(const Frame& a, const Frame& b) {
+    if (a.w != b.w || a.h != b.h || a.grey.empty()) return 1 << 30;
+    int n = 0;
+    for (int y = 16; y < a.h; ++y)
+        for (int x = 0; x < a.w; ++x) {
+            const int i = y * a.w + x;
+            if (std::abs((int)a.grey[i] - (int)b.grey[i]) > 24) ++n;
+        }
+    return n;
+}
+
+/**
+ * Wait until the guest stops doing things: the screen holding still for three
+ * samples in a row. vm.sh learnt this the hard way -- a key sent while the
+ * machine is still booting or compiling lands in the wrong prompt.
+ */
+bool settle(Job& job, int maxSec, int minSec) {
+    for (int i = 0; i < minSec * 10; ++i) { if (job.cancel) return false; napMs(100); }
+    Frame prev;
+    int stable = 0;
+    const double until = (double)std::time(nullptr) + maxSec;
+    while ((double)std::time(nullptr) < until) {
+        if (job.cancel) return false;
+        Frame f = grab();
+        if (f.grey.empty()) return false;          // the emulator went away
+        if (!prev.grey.empty()) {
+            stable = changed(prev, f) < 600 ? stable + 1 : 0;
+            if (stable >= 3) return true;
+        }
+        prev = std::move(f);
+        napMs(2000);
+    }
+    return true;   // a slow machine: carry on rather than give up
+}
+}  // namespace
+
+bool sendKeys(const std::vector<std::string>& keys) {
+    std::vector<std::string> lines;
+    for (auto& k : keys) lines.push_back("sendkey " + k);
+    return monitor(lines, 80);
+}
+
+bool typeText(const std::string& text) { return sendKeys(keysFor(text)); }
+
+bool screenshot(const std::string& ppmPath) {
+    std::string quoted;
+    for (char c : ppmPath) { if (c == '"' || c == '\\') quoted += '\\'; quoted += c; }
+    if (!monitor({"screendump \"" + quoted + "\""}, 50)) return false;
+    std::error_code ec;
+    for (int i = 0; i < 40 && !fs::exists(ppmPath, ec); ++i) napMs(150);
+    napMs(500);
+    return fs::exists(ppmPath, ec);
+}
+
+JobPtr autoStart() {
+    return ujobs::run("Starting TempleOS", [](Job& job) {
+        struct Act { const char* status; int maxSec, minSec; std::vector<std::string> keys; std::string text; };
+        // The exact sequence proven against TempleOS 5.03 under QEMU: two boot
+        // questions, Mount's five prompts for the game disk, then the game.
+        const Act acts[] = {
+            {N_("Booting TempleOS..."), 300, 20, {"n"}, ""},
+            {N_("Answering TempleOS's questions..."), 200, 6, {"n"}, ""},
+            {N_("Answering TempleOS's questions..."), 120, 4, {"ret"}, ""},
+            {N_("Mounting the game disk..."), 60, 3, {}, "Mount;\n"},
+            {N_("Mounting the game disk..."), 60, 3, {}, "C\n"},
+            {N_("Mounting the game disk..."), 60, 3, {"p"}, ""},
+            {N_("Mounting the game disk..."), 60, 3, {}, "1\n"},
+            {N_("Mounting the game disk..."), 60, 3, {"ret"}, ""},
+            {N_("Opening the game disk..."), 30, 2, {}, "Cd(\"C:/\");\n"},
+            // The shell holds an #include until the next statement arrives, so
+            // both lines go together.
+            {N_("Compiling Open Doctrines..."), 30, 2, {}, "#include \"ODGame\"\nODStart;\n"},
+        };
+        const int n = (int)(sizeof acts / sizeof acts[0]);
+        for (int i = 0; i < n; ++i) {
+            job.setStatus(acts[i].status);
+            job.progress = (float)i / n;
+            if (!settle(job, acts[i].maxSec, acts[i].minSec)) {
+                job.fail(job.cancel ? N_("Stopped.") : N_("The emulator stopped answering."));
+                return false;
+            }
+            const bool ok = acts[i].text.empty() ? sendKeys(acts[i].keys) : typeText(acts[i].text);
+            if (!ok) { job.fail(N_("Could not reach the emulator's monitor.")); return false; }
+        }
+        job.setStatus(N_("Open Doctrines is starting in the emulator."));
+        job.progress = 1;
+        return true;
+    });
+}
+
+std::vector<Step> steps() {
     return {
         {"When TempleOS asks to install onto the hard drive, answer no.", {"n"}, ""},
         {"When it offers the tour, answer no.", {"n"}, ""},
-        {"Go to the game's CD.", {}, "Cd(\"" + d + ":/TEMPLEOS\");\n"},
+        {"Start mounting the game disk.", {}, "Mount;\n"},
+        {"Give it drive letter C.", {}, "C\n"},
+        {"Let it probe the hardware.", {"p"}, ""},
+        {"Pick the hard drive (number 1).", {}, "1\n"},
+        {"Finish mounting.", {"ret"}, ""},
+        {"Go to the game disk.", {}, "Cd(\"C:/\");\n"},
         {"Compile and start Open Doctrines.", {}, "#include \"ODGame\"\nODStart;\n"},
     };
 }

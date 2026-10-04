@@ -1,4 +1,5 @@
 #include "ui/Ui.h"
+#include "ui/Strings.h"
 
 #include <algorithm>
 #include <cmath>
@@ -23,6 +24,9 @@ int g_openDropdown = -1;
 std::string g_tooltip;
 std::vector<std::function<void()>> g_overlays;
 float g_caret = 0;
+bool g_escUsed = false;
+struct Clip { int x, y, w, h; };
+std::vector<Clip> g_clips;   // see scissor() below   // a field took this frame's Esc; nothing else may act on it
 
 // While a modal is up, the screen behind it is drawn with input off and the
 // modal with input on -- App toggles this around the two passes.
@@ -36,6 +40,8 @@ Color mix(Color a, Color b, float t) {
 }  // namespace
 
 void beginFrame() {
+    g_escUsed = false;
+    g_clips.clear();
     g_tooltip.clear();
     g_overlays.clear();
     g_caret += GetFrameTime();
@@ -61,10 +67,20 @@ void setScale(float s) { g_scale = s < 0.5f ? 0.5f : s; }
 float scale() { return g_scale; }
 float W() { return GetScreenWidth() / g_scale; }
 float H() { return GetScreenHeight() / g_scale; }
-void scissor(int x, int y, int w, int h) {
-    // Scissor rectangles are in framebuffer pixels, below the camera.
-    BeginScissorMode((int)(x * g_scale), (int)(y * g_scale), (int)(w * g_scale + 0.5f), (int)(h * g_scale + 0.5f));
+// A STACK, because clips nest: a text field inside a scrolling page clips to
+// itself and must then put the PAGE's clip back. raylib keeps one rectangle,
+// and EndScissorMode turns clipping off entirely -- which is how everything
+// below a text field once drew over the top bar.
+void applyClip() {
+    if (g_clips.empty()) { EndScissorMode(); return; }
+    // The intersection of every clip on the stack.
+    int x0 = -100000, y0 = -100000, x1 = 100000, y1 = 100000;
+    for (auto& c : g_clips) { x0 = std::max(x0, c.x); y0 = std::max(y0, c.y); x1 = std::min(x1, c.x + c.w); y1 = std::min(y1, c.y + c.h); }
+    BeginScissorMode((int)(x0 * g_scale), (int)(y0 * g_scale), (int)(std::max(0, x1 - x0) * g_scale + 0.5f),
+                     (int)(std::max(0, y1 - y0) * g_scale + 0.5f));
 }
+void scissor(int x, int y, int w, int h) { g_clips.push_back({x, y, w, h}); applyClip(); }
+void endScissor() { if (!g_clips.empty()) g_clips.pop_back(); applyClip(); }
 Vector2 mouse() { Vector2 m = GetMousePosition(); return {m.x / g_scale, m.y / g_scale}; }
 
 bool hovered(Rectangle r) {
@@ -74,6 +90,18 @@ bool hovered(Rectangle r) {
 
 bool clicked(Rectangle r) {
     return hovered(r) && IsMouseButtonReleased(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(g_pressPos, r);
+}
+
+/** An ellipse (or an arc of one) drawn at the same stroke width as the other icons. */
+static void strokeEllipse(float cx, float cy, float rx, float ry, float t, Color c, float a0 = 0, float a1 = 360) {
+    const int n = 40;
+    Vector2 prev{};
+    for (int k = 0; k <= n; ++k) {
+        const float a = (a0 + (a1 - a0) * k / n) * DEG2RAD;
+        const Vector2 p{cx + cosf(a) * rx, cy + sinf(a) * ry};
+        if (k) DrawLineEx(prev, p, t, c);
+        prev = p;
+    }
 }
 
 void icon(Icon i, float cx, float cy, float s, Color c) {
@@ -90,11 +118,19 @@ void icon(Icon i, float cx, float cy, float s, Color c) {
             DrawLineEx({cx - h * 0.95f, cy - h * 0.5f}, {cx, cy - h * 0.95f}, t, c);
             DrawLineEx({cx + h * 0.95f, cy - h * 0.5f}, {cx, cy - h * 0.95f}, t, c);
             break;
-        case Icon::Globe:
-            DrawRing({cx, cy}, h * 0.85f - t, h * 0.85f, 0, 360, 32, c);
-            DrawLineEx({cx - h * 0.85f, cy}, {cx + h * 0.85f, cy}, t * 0.8f, c);
-            DrawEllipseLines((int)cx, (int)cy, h * 0.35f, h * 0.85f, c);
+        case Icon::Globe: {
+            // Every line at the same weight: an outline, a meridian, the
+            // equator and two parallels, each chord ending on the outline.
+            const float R = h * 0.82f;
+            DrawRing({cx, cy}, R - t, R, 0, 360, 40, c);
+            strokeEllipse(cx, cy, R * 0.42f, R - t / 2, t, c);
+            DrawLineEx({cx - R + t / 2, cy}, {cx + R - t / 2, cy}, t, c);
+            for (float f : {-0.5f, 0.5f}) {
+                const float yy = cy + f * R, half = sqrtf(R * R - f * R * f * R) - t * 0.7f;
+                DrawLineEx({cx - half, yy}, {cx + half, yy}, t, c);
+            }
             break;
+        }
         case Icon::Puzzle:
             DrawRectangleLinesEx({cx - h * 0.7f, cy - h * 0.5f, h * 1.3f, h * 1.2f}, t, c);
             DrawCircle((int)(cx - h * 0.05f), (int)(cy - h * 0.6f), h * 0.25f, c);
@@ -183,6 +219,37 @@ void icon(Icon i, float cx, float cy, float s, Color c) {
         case Icon::Lock:
             DrawRectangleRounded({cx - h * 0.6f, cy - h * 0.1f, h * 1.2f, h * 0.9f}, 0.2f, 4, c);
             DrawRing({cx, cy - h * 0.15f}, h * 0.3f, h * 0.3f + t, 180, 360, 16, c);
+            break;
+        case Icon::Bug: {
+            // Outlined like the rest of the set: a shell split down the middle,
+            // a head, two antennae and three legs a side.
+            const float bodyY = cy + h * 0.18f, rx = h * 0.42f, ry = h * 0.55f;
+            strokeEllipse(cx, bodyY, rx, ry, t, c);
+            DrawLineEx({cx, bodyY - ry + t}, {cx, bodyY + ry - t}, t, c);
+            DrawCircleSector({cx, cy - h * 0.38f}, h * 0.27f, 180, 360, 16, c);
+            DrawLineEx({cx - h * 0.16f, cy - h * 0.58f}, {cx - h * 0.3f, cy - h * 0.82f}, t, c);
+            DrawLineEx({cx + h * 0.16f, cy - h * 0.58f}, {cx + h * 0.3f, cy - h * 0.82f}, t, c);
+            const float off[3] = {-0.12f, 0.2f, 0.52f}, slope[3] = {-0.22f, 0.0f, 0.22f};
+            for (int k = 0; k < 3; ++k)
+                for (float side : {-1.0f, 1.0f}) {
+                    const float yy = bodyY + (off[k] - 0.18f) * h * 1.1f;
+                    DrawLineEx({cx + side * rx * 0.92f, yy}, {cx + side * h * 0.74f, yy + slope[k] * h * 0.8f}, t, c);
+                }
+            break;
+        }
+        case Icon::Shield: {
+            const Vector2 p[] = {{cx - h * 0.68f, cy - h * 0.72f}, {cx, cy - h * 0.9f}, {cx + h * 0.68f, cy - h * 0.72f},
+                                 {cx + h * 0.68f, cy - h * 0.05f}, {cx + h * 0.45f, cy + h * 0.5f}, {cx, cy + h * 0.88f},
+                                 {cx - h * 0.45f, cy + h * 0.5f}, {cx - h * 0.68f, cy - h * 0.05f}};
+            for (int k = 0; k < 8; ++k) { DrawLineEx(p[k], p[(k + 1) % 8], t, c); DrawCircleV(p[k], t / 2, c); }
+            DrawLineEx({cx - h * 0.3f, cy - h * 0.02f}, {cx - h * 0.05f, cy + h * 0.28f}, t * 1.3f, c);
+            DrawLineEx({cx - h * 0.05f, cy + h * 0.28f}, {cx + h * 0.35f, cy - h * 0.3f}, t * 1.3f, c);
+            break;
+        }
+        case Icon::Heart:
+            DrawCircle((int)(cx - h * 0.32f), (int)(cy - h * 0.18f), h * 0.36f, c);
+            DrawCircle((int)(cx + h * 0.32f), (int)(cy - h * 0.18f), h * 0.36f, c);
+            DrawTriangle({cx - h * 0.66f, cy - h * 0.05f}, {cx, cy + h * 0.72f}, {cx + h * 0.66f, cy - h * 0.05f}, c);
             break;
         case Icon::Star: {
             Vector2 pts[10];
@@ -298,6 +365,7 @@ bool textField(Rectangle r, std::string& text, int id, const char* placeholder, 
         if (cmd && IsKeyPressed(KEY_V)) {
             if (const char* clip = GetClipboardText()) { text += clip; changed = true; }
         }
+        if (IsKeyPressed(KEY_ESCAPE)) g_escUsed = true;
         if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_ESCAPE)) g_focus = -1;
     }
     DrawRectangleRounded(r, 0.2f, 8, theme::sunken);
@@ -312,9 +380,73 @@ bool textField(Rectangle r, std::string& text, int id, const char* placeholder, 
     else utext::draw(shown, x, r.y + (r.height - size) / 2 - 1, size, theme::ink);
     if (focus && fmodf(g_caret, 1.0f) < 0.55f)
         DrawRectangle((int)(x + w + 1), (int)(r.y + 8), 2, (int)(r.height - 16), theme::gold);
-    EndScissorMode();
+    endScissor();
     if (hov) SetMouseCursor(MOUSE_CURSOR_IBEAM);
     return changed;
+}
+
+bool textArea(Rectangle r, std::string& text, int id, const char* placeholder) {
+    const bool hov = hovered(r);
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && g_input) {
+        if (hov) g_focus = id;
+        else if (g_focus == id) g_focus = -1;
+    }
+    const bool focus = g_focus == id;
+    bool changed = false;
+    if (focus) {
+        int ch;
+        while ((ch = GetCharPressed()) > 0) {
+            int len = 0;
+            const char* u = CodepointToUTF8(ch, &len);
+            text.append(u, (size_t)len);
+            changed = true;
+        }
+        if (IsKeyPressed(KEY_ENTER) || IsKeyPressedRepeat(KEY_ENTER)) { text += '\n'; changed = true; }
+        if ((IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) && !text.empty()) {
+            size_t k = text.size() - 1;
+            while (k > 0 && ((unsigned char)text[k] & 0xC0) == 0x80) --k;
+            text.erase(k);
+            changed = true;
+        }
+        const bool cmd = IsKeyDown(KEY_LEFT_SUPER) || IsKeyDown(KEY_RIGHT_SUPER) || IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
+        if (cmd && IsKeyPressed(KEY_V)) if (const char* clip = GetClipboardText()) { text += clip; changed = true; }
+        if (IsKeyPressed(KEY_ESCAPE)) { g_focus = -1; g_escUsed = true; }
+    }
+    DrawRectangleRounded(r, 0.05f, 8, theme::sunken);
+    DrawRectangleRoundedLinesEx(r, 0.05f, 8, 1.0f, focus ? theme::gold : (hov ? theme::ruleFirm : theme::rule));
+    scissor((int)r.x + 6, (int)r.y + 4, (int)r.width - 12, (int)r.height - 8);
+    const Rectangle inner{r.x + 10, r.y + 8, r.width - 20, 0};
+    const float h = utext::drawWrapped(text, inner, 16, theme::ink, utext::Sans, false);
+    const float off = std::max(0.0f, h - (r.height - 20));   // keep the end of the text in view
+    if (text.empty() && placeholder && !focus) utext::draw(placeholder, r.x + 10, r.y + 8, 16, theme::faint);
+    else utext::drawWrapped(text, {inner.x, inner.y - off, inner.width, 0}, 16, theme::ink);
+    if (focus && fmodf(g_caret, 1.0f) < 0.55f) DrawRectangle((int)(r.x + 10), (int)(r.y + 8 + h - off - 2), 2, 2, theme::gold);
+    endScissor();
+    if (hov) SetMouseCursor(MOUSE_CURSOR_IBEAM);
+    return changed;
+}
+
+bool searchField(Rectangle r, std::string& text, int id) {
+    const bool changed = textField({r.x, r.y, r.width, r.height}, text, id, T("Search"));
+    // A magnifier over the left padding, and a clear button when there is text.
+    if (text.empty() && focusedField() != id) {
+        const float cx = r.x + r.width - 22, cy = r.y + r.height / 2;
+        DrawRing({cx - 2, cy - 2}, 5, 7, 0, 360, 16, theme::faint);
+        DrawLineEx({cx + 3, cy + 3}, {cx + 8, cy + 8}, 2, theme::faint);
+    } else if (!text.empty()) {
+        Rectangle x{r.x + r.width - 30, r.y + (r.height - 22) / 2, 22, 22};
+        icon(Icon::Cross, x.x + 11, x.y + 11, 12, hovered(x) ? theme::ink : theme::faint);
+        if (clicked(x)) { text.clear(); return true; }
+    }
+    return changed;
+}
+
+bool matches(const std::string& haystack, const std::string& query) {
+    if (query.empty()) return true;
+    // Case-insensitive for ASCII; other scripts match as typed, which is what
+    // a person typing in them expects.
+    auto low = [](std::string s) { for (char& c : s) c = (char)std::tolower((unsigned char)c); return s; };
+    return low(haystack).find(low(query)) != std::string::npos;
 }
 
 int dropdown(Rectangle r, const std::vector<std::string>& items, int selected, int id) {
@@ -358,7 +490,7 @@ int dropdown(Rectangle r, const std::vector<std::string>& items, int selected, i
                 utext::draw(utext::ellipsize(items[i], list.width - 24, 16), list.x + 12, y + 7, 16,
                             i == selected ? theme::gold : theme::ink);
             }
-            EndScissorMode();
+            endScissor();
         });
     }
     return result;
@@ -401,7 +533,7 @@ void beginScroll(Rectangle r, Scroll& s) {
 }
 
 void endScroll(Rectangle r, Scroll& s, float contentHeight) {
-    EndScissorMode();
+    endScissor();
     s.content = contentHeight;
     if (contentHeight > r.height) {
         const float frac = r.height / contentHeight;
@@ -433,5 +565,6 @@ void deferredOverlays() {
 }
 
 int focusedField() { return g_focus; }
+bool escapePressed() { return IsKeyPressed(KEY_ESCAPE) && !g_escUsed && g_focus < 0; }
 void clearFocus() { g_focus = -1; g_openDropdown = -1; }
 }  // namespace ui

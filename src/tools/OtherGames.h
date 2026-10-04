@@ -14,6 +14,7 @@
 //   Greater Diplomacy 4   a browser game on itch.io; the launcher opens its page.
 #include "core/Jobs.h"
 #include "core/Process.h"
+#include "od/Support.h"
 #include <memory>
 #include <string>
 
@@ -24,6 +25,13 @@ const char* licence(Game g);
 const char* source(Game g);
 std::string dir(Game g);
 bool installed(Game g);
+/**
+ * Whether this game exists for this system at all -- not "something is
+ * missing" (that is prerequisite()) but "there is no build of it, or of what
+ * it depends on, for this OS and CPU". The launcher refuses to install or start
+ * it when not ok, and says why.
+ */
+Verdict support(Game g);
 /** What is missing on this system before it can run ("Java 11 or newer", "Python 3.10+"), or empty. */
 std::string prerequisite(Game g);
 JobPtr install(Game g);

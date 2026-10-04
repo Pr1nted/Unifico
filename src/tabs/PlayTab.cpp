@@ -3,6 +3,8 @@
 #include "core/Settings.h"
 #include "od/Account.h"
 #include "od/Achievements.h"
+#include "od/Support.h"
+#include "od/Playtime.h"
 #include "ui/Art.h"
 #include "ui/Strings.h"
 #include "ui/Ui.h"
@@ -17,8 +19,14 @@ ui::Scroll g_scroll;
 
 bool installPicker(App& a, Rectangle r, Install& out) {
     if (a.installs.empty()) {
-        utext::draw(T("No version is installed yet."), r.x, r.y + 10, 16, theme::muted);
-        if (ui::button({r.x + 260, r.y, 170, 36}, T("Install one"), ui::Style::Primary)) a.tab = Tab::Installs;
+        // Laid out INSIDE the picker's own rectangle, right-aligned: the
+        // button where the dropdown would be, the sentence to its left. It used
+        // to start at r.x and run a button past the right edge of the page.
+        const float bw = std::min(170.0f, r.width * 0.5f);
+        const Rectangle btn{r.x + r.width - bw, r.y, bw, r.height};
+        const char* msg = T("No version is installed yet.");
+        utext::draw(msg, btn.x - 16 - utext::measure(msg, 16).x, r.y + (r.height - 16) / 2 - 1, 16, theme::muted);
+        if (ui::button(btn, T("Install one"), ui::Style::Primary)) a.tab = Tab::Installs;
         return false;
     }
     std::vector<std::string> labels;
@@ -82,6 +90,9 @@ void drawPlay(App& a, Rectangle r) {
     } else if (!have) {
         Icon dl = Icon::Download;
         if (ui::button(playR, T("INSTALL"), ui::Style::Primary, false, &dl)) a.tab = Tab::Installs;
+    } else if (Verdict runs = usupport::binary(sel.exe); !runs.ok) {
+        ui::button(playR, T("PLAY"), ui::Style::Primary, true);
+        utext::drawWrapped(verdictText(runs).c_str(), {playR.x - 60, playR.y + playH + 6, playW + 120, 40}, 13, theme::danger);
     } else {
         // The button glows: a slow gold breath, the launcher's one flourish.
         const float g = 0.5f + 0.5f * sinf(a.time * 2.2f);
@@ -98,6 +109,9 @@ void drawPlay(App& a, Rectangle r) {
     const float ww = utext::measure(who, 16, utext::Semi).x;
     utext::draw(signedIn ? T("Playing as") : T("Account"), r.x + r.width - 40 - std::max(ww, 90.0f), bar.y + 18, 13, theme::faint, utext::Semi);
     utext::draw(who, r.x + r.width - 40 - std::max(ww, 90.0f), bar.y + 44, 16, theme::ink, utext::Semi);
+    // Hours played, under the version picker: the number Steam would show.
+    if (const double pt = uplay::openDoctrines(a.allDataDirs()); pt >= 60)
+        utext::draw(std::string(T("Played")) + " " + uplay::human(pt), r.x + 40, bar.y + 80, 13, theme::muted);
 
     // Below the picture: news and what changed.
     Rectangle below{r.x, hero.y + heroH, r.width, r.height - heroH};

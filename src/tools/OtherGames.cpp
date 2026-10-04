@@ -6,6 +6,7 @@
 #include "core/Paths.h"
 #include "core/Zip.h"
 #include "od/Installs.h"
+#include "ui/Strings.h"
 
 #include <filesystem>
 
@@ -68,6 +69,32 @@ const char* source(Game g) {
     }
 }
 
+Verdict support(Game g) {
+    Verdict v;
+    const std::string t = upaths::platformTag();
+    if (g == Game::Gd4) return v;   // a web page: anything with a browser
+    if (g == Game::Unciv) {
+        // Unciv's desktop jar carries LWJGL natives for Windows, macOS and
+        // Linux on x64/arm64 only; the Windows and Linux x64 zips bundle Java.
+        if (t == "freebsd-x64" || t == "openbsd-x64" || t == "linux-armv7" || t == "linux-riscv64" || t == "linux-x86" ||
+            t == "windows-x86") {
+            v.ok = false;
+            v.why = N_("Unciv has no desktop build for %s.");
+            v.a1 = usupport::host();
+        }
+        return v;
+    }
+    // Greater Diplomacy 5's Python dependencies (pygame-ce, mini-racer) are
+    // published as wheels for macOS, Linux x64/arm64 and Windows x64 only;
+    // anywhere else pip would need to build V8 from source, which it cannot.
+    if (!(t == "macos-arm64" || t == "macos-x64" || t == "linux-x64" || t == "linux-arm64" || t == "windows-x64")) {
+        v.ok = false;
+        v.why = N_("Greater Diplomacy 5's dependencies are not published for %s.");
+        v.a1 = usupport::host();
+    }
+    return v;
+}
+
 std::string dir(Game g) {
     return upaths::gamesDir() + (g == Game::Unciv ? "/unciv" : g == Game::Gd5 ? "/gd5" : "/gd4");
 }
@@ -92,6 +119,7 @@ std::string prerequisite(Game g) {
 
 JobPtr install(Game g) {
     return ujobs::run(std::string("Installing ") + name(g), [g](Job& job) {
+        if (Verdict v = support(g); !v.ok) { job.fail(v.why + (v.a1.empty() ? "" : " (" + v.a1 + ")")); return false; }
         const std::string d = dir(g);
         std::string err;
         if (g == Game::Unciv) {
@@ -161,6 +189,7 @@ JobPtr install(Game g) {
 bool uninstall(Game g, std::string* error) { return ufs::removeAll(dir(g), error); }
 
 std::unique_ptr<uproc::Child> launch(Game g, std::string* error) {
+    if (Verdict v = support(g); !v.ok) { if (error) *error = verdictText(v); return nullptr; }
     if (g == Game::Gd4) { uproc::openUrl(source(g)); return nullptr; }
     uproc::Spec spec;
     spec.cwd = dir(g);

@@ -14,6 +14,7 @@ std::vector<DirectoryMod> g_dir;
 JobPtr g_dirJob, g_modJob;
 std::string g_dirError;
 std::shared_ptr<std::vector<DirectoryMod>> g_dirPending;
+std::string g_query;
 }
 
 void drawMods(App& a, Rectangle r) {
@@ -35,7 +36,8 @@ void drawMods(App& a, Rectangle r) {
     if (g_dirJob->done && g_dirPending) { g_dir = *g_dirPending; g_dirError = g_dirJob->ok ? "" : g_dirJob->status(); g_dirPending.reset(); }
     if (g_modJob && g_modJob->done) { a.toast(g_modJob->status(), !g_modJob->ok); g_modJob.reset(); }
 
-    Rectangle body{r.x, y0 + 54, r.width, r.height - 82};
+    ui::searchField({x, y0 + 50, std::min(420.0f, w), 38}, g_query, 4600);
+    Rectangle body{r.x, y0 + 100, r.width, r.height - 128};
     ui::beginScroll(body, g_scroll);
     float y = body.y - g_scroll.y;
     ui::heading(T("Installed"), x, y, 20);
@@ -51,6 +53,7 @@ void drawMods(App& a, Rectangle r) {
     auto mods = umods::installed(inst.dataDir);
     if (mods.empty()) { utext::draw(T("No mods in this version."), x, y, 15, theme::faint); y += 30; }
     for (auto& m : mods) {
+        if (!ui::matches(m.id + " " + m.file, g_query)) continue;
         ui::card({x, y, w, 58});
         utext::draw(m.id, x + 20, y + 10, 17, theme::ink, utext::Semi);
         utext::draw(ufs::humanBytes(m.size) + (m.known ? "" : std::string("  ·  ") + T("not yet loaded by the game")), x + 20, y + 33, 13, theme::faint);
@@ -74,6 +77,7 @@ void drawMods(App& a, Rectangle r) {
     const float colW = (w - 16) / 2;
     int k = 0;
     for (auto& d : g_dir) {
+        if (!ui::matches(d.name + " " + d.summary + " " + d.by + " " + d.id, g_query)) continue;
         const float cx = x + (k % 2) * (colW + 16);
         if (k % 2 == 0 && k) y += 132;
         Rectangle card{cx, y, colW, 120};

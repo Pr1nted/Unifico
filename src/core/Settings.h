@@ -27,6 +27,7 @@ struct Settings {
     std::map<std::string, LaunchOptions> launch;   // per version tag
     std::string uiScale = "auto";
     bool fullscreen = false;
+    std::string feedbackInstall;           // random; only for the report service's daily cap
     int accent = 0xC9A227;                 // 0xRRGGBB; the website's gold by default
     bool accentFromGame = false;           // use the selected version's own accent instead
 

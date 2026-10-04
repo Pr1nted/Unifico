@@ -5,6 +5,7 @@
 #include "core/Fs.h"
 #include "core/Paths.h"
 #include "core/Settings.h"
+#include "core/Window.h"
 #include "od/Analytics.h"
 #include "od/GameConfig.h"
 #include "tools/OtherGames.h"
@@ -132,7 +133,7 @@ void drawSettings(App& a, Rectangle r) {
         int n = ui::dropdown({x + w - 300, y, 300, 38}, names, sel, 951);
         if (n != sel) { s.uiScale = vals[n]; s.save(); }
         y += 52;
-        bool fs = IsWindowState(FLAG_BORDERLESS_WINDOWED_MODE);
+        bool fs = uwindow::isFullscreen();
         if (ui::toggle({x, y, w, 48}, T("Fullscreen"), &fs, T("F11 switches it from anywhere in the launcher."))) a.toggleFullscreen();
         y += 60;
     }
@@ -185,7 +186,10 @@ void drawSettings(App& a, Rectangle r) {
             }
         }
         if (changed && !locked) uconfig::save(inst.dataDir, g_cfg);
-    } else y += 40;
+    } else {
+        utext::draw(T("Each installed version's own settings appear here, ready to edit."), x, y, 15, theme::faint);
+        y += 34;
+    }
 
     // ---- privacy ----
     section(x, y, w, T("Privacy"));
@@ -240,13 +244,16 @@ void drawSettings(App& a, Rectangle r) {
                 s.otherGamesUnlocked = true;
                 s.save();
                 a.toast(T("Other games unlocked: look in the list on the left."));
-            } else if (a.versionClicks >= 4) {
+            } else if (a.versionClicks >= 3) {
                 a.toast(TextFormat(T("%d more..."), 7 - a.versionClicks));
             }
         }
         y += 30;
         utext::drawWrapped(T("The launcher for Open Doctrines. Released under the same licence as the game. Map translation by open-dragoman."),
                            {x, y, w, 40}, 14, theme::faint);
+        utext::drawWrapped(T("Open Doctrines is free and made by one person. If you want to help keep it going, there is a Ko-fi page; it changes nothing in the game."),
+                           {x, y + 22, w, 40}, 14, theme::faint);
+        y += 22;
         y += 44;
         if (ui::button({x, y, 200, 34}, T("Check for updates"), ui::Style::Secondary)) {
             a.updateJob = ujobs::run("update check", [&a](Job&) {
@@ -255,6 +262,11 @@ void drawSettings(App& a, Rectangle r) {
                 return true;
             });
             a.toast(T("Checking..."));
+        }
+        {
+            Icon heart = Icon::Heart;
+            if (ui::button({x + 420, y, 230, 34}, T("Support on Ko-fi"), ui::Style::Ghost, false, &heart))
+                uproc::openUrl("https://ko-fi.com/pr1nted");
         }
         if (s.otherGamesUnlocked && ui::button({x + 210, y, 200, 34}, T("Hide other games"), ui::Style::Ghost)) {
             s.otherGamesUnlocked = false; s.save(); a.versionClicks = 0;

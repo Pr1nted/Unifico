@@ -6,6 +6,9 @@
 #include "core/Paths.h"
 #include "core/Settings.h"
 #include "od/Analytics.h"
+#include "od/Support.h"
+#include "od/Playtime.h"
+#include "ui/Strings.h"
 #include "ui/Strings.h"
 #include "ui/Ui.h"
 
@@ -18,6 +21,15 @@ std::map<std::string, DiskUsage> g_usage;
 JobPtr g_usageJob;
 std::shared_ptr<std::map<std::string, DiskUsage>> g_pending;
 std::vector<std::string> g_detected;
+std::string g_query;
+int g_channel = 0;   // 0 all, 1 releases, 2 betas, 3 alphas, 4 snapshots, 5 installed
+
+// The game's own version letters (src/Game.cpp): a alpha, b beta, r release,
+// s snapshot. A version with no letter is a release.
+int channelOf(const std::string& v) {
+    const char c = v.empty() ? 'r' : (char)std::tolower((unsigned char)v.back());
+    return c == 'a' ? 3 : c == 'b' ? 2 : c == 's' ? 4 : 1;
+}
 bool g_detectedDone = false;
 
 void refreshUsage(App& a) {
@@ -84,6 +96,7 @@ void drawInstalls(App& a, Rectangle r) {
         std::string line = i.external ? std::string(T("Existing installation")) + "  ·  " + i.root
                                       : TextFormat(T("%s  ·  worlds %s  ·  mods %s"), ufs::humanBytes(u.total).c_str(),
                                                    ufs::humanBytes(u.saves).c_str(), ufs::humanBytes(u.mods).c_str());
+        if (const double pt = uplay::seconds("od:" + i.tag); pt >= 60) line += std::string("  ·  ") + T("played") + " " + uplay::human(pt);
         utext::draw(utext::ellipsize(line, w - 480, 14), x + 20, y + 44, 14, theme::muted);
         float bx = x + w - 20;
         auto btn = [&](float bw, const char* label, ui::Style s) { bx -= bw; bool c = ui::button({bx, y + 20, bw, 36}, label, s); bx -= 8; return c; };
@@ -104,7 +117,10 @@ void drawInstalls(App& a, Rectangle r) {
         }
         if (btn(130, open ? T("Close options") : T("Launch options"), ui::Style::Ghost)) g_expanded = open ? "" : i.tag;
         if (btn(100, T("Folder"), ui::Style::Ghost)) uproc::revealInFileManager(i.root);
-        if (btn(100, T("Play"), ui::Style::Primary)) { a.selectedTag = i.tag; a.play(); }
+        const Verdict runs = usupport::binary(i.exe);
+        if (!runs.ok) {
+            utext::draw(utext::ellipsize(verdictText(runs).c_str(), w - 560, 13), x + 20, y + 62, 13, theme::danger);
+        } else if (btn(100, T("Play"), ui::Style::Primary)) { a.selectedTag = i.tag; a.play(); }
 
         if (open) {
             LaunchOptions& lo = Settings::get().optionsFor(i.tag);
@@ -168,27 +184,43 @@ void drawInstalls(App& a, Rectangle r) {
         y += 60;
     }
 
-    // Everything released.
-    y += 14;
+    // Everything released: searchable, and by channel.
     ui::heading(T("Available versions"), x, y, 20);
-    bool pre = Settings::get().showPrereleases;
-    if (ui::toggle({x + w - 300, y - 4, 300, 36}, T("Show pre-releases"), &pre)) { Settings::get().showPrereleases = pre; Settings::get().save(); }
-    y += 40;
+    ui::searchField({x + w - 300, y - 6, 300, 38}, g_query, 4400);
+    y += 44;
+    {
+        const char* chans[] = {T("All"), T("Releases"), T("Betas"), T("Alphas"), T("Snapshots"), T("Installed")};
+        float cx = x;
+        for (int i = 0; i < 6; ++i) {
+            const float cw = utext::measure(chans[i], 15).x + 26;
+            Rectangle chip{cx, y, cw, 30};
+            const bool on = g_channel == i;
+            DrawRectangleRounded(chip, 0.5f, 8, on ? theme::gold : (ui::hovered(chip) ? theme::ruleFirm : theme::raise));
+            utext::draw(chans[i], cx + 13, y + 6, 15, on ? theme::ground : theme::ink);
+            if (ui::clicked(chip)) g_channel = i;
+            cx += cw + 8;
+        }
+    }
+    y += 46;
     if (a.releases.empty()) {
         utext::draw(a.releasesJob ? T("Loading the release list...") : T("The release list could not be loaded."), x, y, 15, theme::faint);
         y += 30;
     }
     const std::string asset = ureleases::gameAssetName();
+    int shown = 0;
     for (auto& rel : a.releases) {
-        if (rel.prerelease && !pre) continue;
         bool have = false;
         for (auto& i : a.installs) if (i.tag == rel.tag) have = true;
+        if (g_channel == 5 ? !have : (g_channel != 0 && channelOf(rel.version) != g_channel)) continue;
+        if (!ui::matches(rel.version + " " + rel.name + " " + rel.notes.substr(0, 400), g_query)) continue;
+        ++shown;
         const ReleaseAsset* as = rel.assetFor(asset);
         Rectangle card{x, y, w, 60};
         ui::card(card, false);
         utext::draw(rel.version, x + 20, y + 10, 18, theme::ink, utext::Semi);
         std::string sub = rel.publishedAt.substr(0, 10);
-        if (rel.prerelease) sub += std::string("  ·  ") + T("pre-release");
+        static const char* chanName[] = {"", N_("release"), N_("beta"), N_("alpha"), N_("snapshot")};
+        sub += std::string("  ·  ") + T(chanName[channelOf(rel.version)]);
         if (as) sub += "  ·  " + ufs::humanBytes(as->size);
         else sub += std::string("  ·  ") + T("no build for this computer");
         utext::draw(sub, x + 20, y + 34, 13, theme::faint);
@@ -201,5 +233,6 @@ void drawInstalls(App& a, Rectangle r) {
         }
         y += 68;
     }
+    if (!a.releases.empty() && shown == 0) { utext::draw(T("Nothing matches."), x, y, 15, theme::faint); y += 30; }
     ui::endScroll(r, g_scroll, y + g_scroll.y - r.y + 30);
 }

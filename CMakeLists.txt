@@ -34,6 +34,9 @@ set(OD_ACHIEVEMENT_KEYS "" CACHE STRING
     "Achievement-grant public keys (base64url raw Ed25519, comma-separated)")
 set(UNIFICO_GITHUB_REPO "Pr1nted/Open-Doctrines" CACHE STRING "Where game releases are published")
 set(UNIFICO_SELF_REPO "Pr1nted/Unifico" CACHE STRING "Where launcher releases are published")
+# Discord application for rich presence. Public (it travels in every presence
+# payload); the same application the game uses, so one entry on a profile.
+set(UNIFICO_DISCORD_APP_ID "1547303703370014830" CACHE STRING "Discord application id (empty = no presence)")
 option(UNIFICO_WITH_DRAGOMAN "Build the map translator (fetches open-dragoman)" ON)
 set(UNIFICO_DRAGOMAN_REF "v0.5.2" CACHE STRING "open-dragoman tag to build against")
 
@@ -110,6 +113,7 @@ set(UNIFICO_SOURCES
     src/core/Ed25519.cpp
     src/core/Assets.cpp
     src/core/FileDialog.cpp
+    src/core/Window.cpp
     src/ui/Ui.cpp
     src/ui/Text.cpp
     src/ui/Arabic.cpp
@@ -122,10 +126,15 @@ set(UNIFICO_SOURCES
     src/od/Servers.cpp
     src/od/GameConfig.cpp
     src/od/Account.cpp
+    src/od/Admin.cpp
     src/od/Achievements.cpp
     src/od/GrantVerify.cpp
     src/od/News.cpp
     src/od/Analytics.cpp
+    src/od/Feedback.cpp
+    src/od/Support.cpp
+    src/od/Discord.cpp
+    src/od/Playtime.cpp
     src/od/Launch.cpp
     src/tools/Translate.cpp
     src/tools/OtherGames.cpp
@@ -139,6 +148,7 @@ set(UNIFICO_SOURCES
     src/tabs/AchievementsTab.cpp
     src/tabs/ServersTab.cpp
     src/tabs/AccountTab.cpp
+    src/tabs/AdminTab.cpp
     src/tabs/SettingsTab.cpp
     src/tabs/ToolsTab.cpp
     src/tabs/ConsolePanel.cpp
@@ -181,7 +191,9 @@ endif()
 
 if(WIN32)
     target_link_libraries(Unifico PRIVATE winhttp shell32 ole32 uuid comdlg32 psapi ws2_32)
-    target_compile_definitions(Unifico PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
+    # Windows 10 is the floor (as for the game): IFileDialog and
+    # GetUserDefaultLocaleName are Vista-era calls MinGW hides below 0x0600.
+    target_compile_definitions(Unifico PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS _WIN32_WINNT=0x0A00 WINVER=0x0A00)
     if(MSVC)
         # One self-contained exe: no VC++ redistributable to install first.
         set_property(TARGET Unifico PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -203,7 +215,12 @@ endif()
 if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "MinSizeRel")
     include(CheckIPOSupported)
     check_ipo_supported(RESULT ipo_ok OUTPUT ipo_msg)
-    if(ipo_ok)
+    # Not with GCC. Its LTO partitioning drops "[clone .lto_priv.N]" copies it
+    # still references, and the link fails with hundreds of undefined symbols
+    # -- on Linux x64 and MinGW reliably, on Linux arm64 only sometimes, which
+    # is the worse kind of failure. Clang and MSVC keep it; -Os and section GC
+    # still apply everywhere.
+    if(ipo_ok AND NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         set_property(TARGET Unifico PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
     endif()
     if(NOT MSVC)
@@ -225,14 +242,16 @@ add_executable(UnificoTest EXCLUDE_FROM_ALL
     src/core/Fs.cpp src/core/Json.cpp src/core/Zip.cpp src/core/Sha256.cpp src/core/Ed25519.cpp
     src/core/Paths.cpp src/core/Log.cpp src/core/Jobs.cpp
     src/od/GrantVerify.cpp src/od/Worlds.cpp src/od/GameConfig.cpp src/od/Releases.cpp
-    src/update/SelfUpdate.cpp src/core/Http.cpp src/core/Process.cpp src/core/Settings.cpp
+    src/od/Support.cpp src/update/SelfUpdate.cpp src/core/Http.cpp src/core/Process.cpp src/core/Settings.cpp
+    src/tools/TempleOS.cpp
     third_party/miniz/miniz.c third_party/miniz/miniz_tdef.c
     third_party/miniz/miniz_tinfl.c third_party/miniz/miniz_zip.c)
 target_include_directories(UnificoTest PRIVATE src third_party third_party/miniz
                            "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_compile_definitions(UnificoTest PRIVATE UNIFICO_NO_UI=1)
 if(WIN32)
-    target_link_libraries(UnificoTest PRIVATE winhttp shell32 ole32)
+    target_link_libraries(UnificoTest PRIVATE winhttp shell32 ole32 ws2_32)
+    target_compile_definitions(UnificoTest PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00 WINVER=0x0A00)
 else()
     target_link_libraries(UnificoTest PRIVATE CURL::libcurl Threads::Threads)
 endif()

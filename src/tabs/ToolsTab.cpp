@@ -113,6 +113,7 @@ void drawTools(App& a, Rectangle r) {
     if (ui::button({x + 24, y + 74, 160, 34}, T("Open the console"), ui::Style::Secondary)) a.consoleOpen = true;
     if (ui::button({x + 194, y + 74, 170, 34}, T("Download a log..."), ui::Style::Secondary)) a.saveLog();
     if (ui::button({x + 374, y + 74, 160, 34}, T("Logs folder"), ui::Style::Ghost)) uproc::revealInFileManager(upaths::logsDir());
+    if (ui::button({x + 544, y + 74, 180, 34}, T("Report a problem"), ui::Style::Primary)) a.openFeedback(true);
     y += 136;
 
     // ---- TempleOS ----

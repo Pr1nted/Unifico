@@ -94,3 +94,13 @@ const char* T(const char* english) {
     auto it = ustr::g_table.find(english);
     return it == ustr::g_table.end() ? english : it->second.c_str();
 }
+
+#include "od/Support.h"
+#include <cstdio>
+
+std::string verdictText(const Verdict& v) {
+    if (v.ok) return {};
+    char buf[512];
+    std::snprintf(buf, sizeof buf, T(v.why.c_str()), v.a1.c_str(), v.a2.c_str());
+    return buf;
+}

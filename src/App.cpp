@@ -6,9 +6,15 @@
 #include "core/Log.h"
 #include "core/Paths.h"
 #include "core/Settings.h"
+#include "core/Window.h"
 #include "od/Account.h"
+#include "od/Admin.h"
 #include "od/Achievements.h"
 #include "od/Analytics.h"
+#include "od/Feedback.h"
+#include "od/Support.h"
+#include "od/Discord.h"
+#include "od/Playtime.h"
 #include "tools/OtherGames.h"
 #include "ui/Art.h"
 #include "ui/Strings.h"
@@ -40,7 +46,8 @@ const char* tabName(Tab t) {
     switch (t) {
         case Tab::Play: return "play"; case Tab::Installs: return "installs"; case Tab::Worlds: return "worlds";
         case Tab::Mods: return "mods"; case Tab::Achievements: return "achievements"; case Tab::Servers: return "servers";
-        case Tab::Account: return "account"; case Tab::Settings: return "settings"; default: return "tools";
+        case Tab::Account: return "account"; case Tab::Settings: return "settings"; case Tab::Admin: return "admin";
+        default: return "tools";
     }
 }
 }  // namespace
@@ -52,12 +59,14 @@ void App::init(int argc, char** argv) {
     ustr::setLanguage(Settings::get().language);
     Account::get().init(UNIFICO_ACCOUNT_ISSUER);
     uanalytics::init(UNIFICO_ACCOUNT_ISSUER);
+    udiscord::init(UNIFICO_DISCORD_APP_ID);
 
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_WINDOW_HIGHDPI | FLAG_MSAA_4X_HINT | FLAG_VSYNC_HINT);
     SetTraceLogLevel(LOG_WARNING);
     InitWindow(1220, 760, "Unifico");
     SetWindowMinSize(960, 600);
-    if (Settings::get().fullscreen) ToggleBorderlessWindowed();
+    // Restored natively on macOS; elsewhere borderless, with Esc as the way out.
+    if (Settings::get().fullscreen) uwindow::toggleFullscreen();
     // For checking layouts at other sizes (e.g. with --screenshots): WxH.
     if (const char* ws = std::getenv("UNIFICO_WINDOW")) {
         int w = 0, h = 0;
@@ -159,9 +168,71 @@ std::vector<std::string> App::allDataDirs() const {
 void App::toggleFullscreen() {
     // Borderless windowed rather than exclusive fullscreen: instant, no mode
     // switch, and the game can still be alt-tabbed to.
-    ToggleBorderlessWindowed();
-    Settings::get().fullscreen = IsWindowState(FLAG_BORDERLESS_WINDOWED_MODE);
+    uwindow::toggleFullscreen();
+    // The native macOS transition is animated and reports its new state a
+    // moment later, so the setting stores the state we asked for.
+    Settings::get().fullscreen = !Settings::get().fullscreen;
     Settings::get().save();
+}
+
+void App::openFeedback(bool bug) {
+    struct Form { bool bug; int cat = 7; std::string title, body; bool diag = true; JobPtr job; };
+    auto f = std::make_shared<Form>();
+    f->bug = bug;
+    modal = [this, f]() -> bool {
+        const float mw = 640, mh = 540;
+        Rectangle m{(ui::W() - mw) / 2, (ui::H() - mh) / 2, mw, mh};
+        modalRect = m;
+        ui::card(m);
+        ui::heading(f->bug ? T("Report a problem") : T("Suggest something"), m.x + 26, m.y + 20, 24);
+        float y = m.y + 64;
+        if (Account::get().state() != Account::State::SignedIn) {
+            utext::drawWrapped(T("Please sign in to send this. Reports are published, and signed with your nickname."),
+                               {m.x + 26, y, mw - 52, 60}, 16, theme::muted);
+            bool keep = true;
+            if (ui::button({m.x + 26, y + 60, 160, 40}, T("Sign in"), ui::Style::Primary)) { tab = Tab::Account; shelf = Shelf::OpenDoctrines; keep = false; }
+            if (ui::button({m.x + mw - 146, m.y + mh - 62, 120, 40}, T("Cancel"), ui::Style::Ghost) || ui::escapePressed()) keep = false;
+            return keep;
+        }
+        // Bug or suggestion.
+        if (ui::button({m.x + 26, y, 150, 34}, T("Bug"), f->bug ? ui::Style::Primary : ui::Style::Ghost)) f->bug = true;
+        if (ui::button({m.x + 186, y, 150, 34}, T("Suggestion"), !f->bug ? ui::Style::Primary : ui::Style::Ghost)) f->bug = false;
+        std::vector<std::string> cats;
+        for (int i = 0; i < 8; ++i) cats.push_back(T(ufeedback::categoryLabel(i)));
+        f->cat = ui::dropdown({m.x + mw - 246, y, 220, 34}, cats, f->cat, 960);
+        y += 50;
+        utext::draw(T("Title"), m.x + 26, y, 14, theme::faint, utext::Semi);
+        ui::textField({m.x + 26, y + 20, mw - 52, 38}, f->title, 9100);
+        y += 70;
+        utext::draw(T("What happened, and what you expected"), m.x + 26, y, 14, theme::faint, utext::Semi);
+        ui::textArea({m.x + 26, y + 20, mw - 52, 150}, f->body, 9101);
+        y += 186;
+        ui::toggle({m.x + 26, y, mw - 52, 48}, T("Attach the launcher log and the game console"), &f->diag,
+                   T("Helps find the cause. You can read it first with Download a log."));
+        y += 56;
+        if (f->job && f->job->done) {
+            if (f->job->ok) { toast(T(f->job->status().c_str())); return false; }
+            utext::draw(utext::ellipsize(f->job->status(), mw - 52, 14), m.x + 26, y, 14, theme::danger);
+        }
+        bool keep = true;
+        const bool sending = f->job && !f->job->done;
+        if (ui::button({m.x + mw - 26 - 150, m.y + mh - 62, 150, 40}, sending ? T("Sending...") : T("Send"), ui::Style::Primary,
+                       sending || f->title.size() < 4 || f->body.size() < 10)) {
+            std::string diag;
+            if (f->diag) {
+                diag = std::string("Unifico ") + UNIFICO_VERSION + " on " + upaths::platformTag() + "\n--- launcher ---\n";
+                for (auto& l : ulog::tail(150)) diag += l + "\n";
+                diag += "--- game console ---\n";
+                const size_t from = console.size() > 150 ? console.size() - 150 : 0;
+                for (size_t i = from; i < console.size(); ++i) diag += console[i] + "\n";
+            }
+            f->job = ufeedback::send(f->bug, f->cat, f->title, f->body, diag);
+        }
+        // Esc leaves a text field first; only an Esc with nothing focused closes.
+        if (ui::button({m.x + mw - 26 - 150 - 12 - 120, m.y + mh - 62, 120, 40}, T("Cancel"), ui::Style::Ghost) ||
+            ui::escapePressed()) keep = false;
+        return keep;
+    };
 }
 
 void App::toast(const std::string& text, bool error) {
@@ -181,7 +252,7 @@ void App::confirm(const std::string& title, const std::string& body, const std::
         if (ui::button({r.x + r.width - 28 - 150, r.y + r.height - 64, 150, 40}, yes.c_str(),
                        danger ? ui::Style::Danger : ui::Style::Primary)) { onYes(); keep = false; }
         if (ui::button({r.x + r.width - 28 - 150 - 12 - 120, r.y + r.height - 64, 120, 40}, T("Cancel"), ui::Style::Ghost)) keep = false;
-        if (IsKeyPressed(KEY_ESCAPE)) keep = false;
+        if (ui::escapePressed()) keep = false;
         return keep;
     };
 }
@@ -192,6 +263,9 @@ void App::play(const std::string& extraArg) {
     if (running && running->child && running->child->running()) return;
     Install i;
     if (!selectedInstall(i)) { tab = Tab::Installs; toast(T("Install a version first."), true); return; }
+    // Never start what this computer cannot run: the binary's own header
+    // decides, not its file name (see od/Support.h).
+    if (Verdict v = usupport::binary(i.exe); !v.ok) { toast(verdictText(v), true); return; }
     std::string err;
     running = ulaunch::start(i, extraArg, &err);
     if (!running) { toast(std::string(T("The game could not be started: ")) + err, true); return; }
@@ -224,6 +298,7 @@ void App::pollRunning() {
         if (!running->child->running()) {
             const int code = running->child->exitCode();
             const double minutes = (GetTime() - running->startedAt) / 60.0;
+            uplay::add("od:" + running->install.tag, minutes * 60.0);
             const char* bucket = minutes < 1 ? "lt1" : minutes < 5 ? "1-5" : minutes < 15 ? "5-15" : minutes < 60 ? "15-60" : "gt60";
             uanalytics::event("game_exit", {{"game_version", running->install.version}, {"minutes_bucket", bucket},
                                             {"exit_kind", code == 0 ? "clean" : (running->child->killedForMemory() ? "memory" : "error")}});
@@ -240,7 +315,12 @@ void App::pollRunning() {
     }
     if (other) {
         for (auto& l : other->linesSince(otherFrom)) console.push_back("[" + otherName + "] " + l);
-        if (!other->running()) { other.reset(); otherFrom = 0; }
+        if (!other->running()) {
+            const std::string key = otherName == "Unciv" ? "unciv" : otherName == "TempleOS" ? "templeos" : "gd5";
+            uplay::add(key, GetTime() - otherStartedAt);
+            other.reset();
+            otherFrom = 0;
+        }
     }
     if (console.size() > 8000) console.erase(console.begin(), console.begin() + 2000);
 }
@@ -288,6 +368,9 @@ static void drawRail(App& a, Rectangle r) {
         utext::draw(utext::ellipsize(g.name, row.width - 76, 16), row.x + 68, row.y + 13, 16, active ? theme::ink : theme::muted, utext::Semi);
         const char* sub = g.s == Shelf::OpenDoctrines ? T("Grand strategy") : g.s == Shelf::TempleOS ? T("In an emulator")
                         : T("Another open game");
+        if ((g.s == Shelf::Unciv && !uother::support(uother::Game::Unciv).ok) ||
+            (g.s == Shelf::Gd5 && !uother::support(uother::Game::Gd5).ok))
+            sub = T("Not on this computer");
         utext::draw(sub, row.x + 68, row.y + 35, 13, theme::faint);
         if (ui::clicked(row)) {
             a.shelf = g.s;
@@ -319,7 +402,9 @@ static void drawTopBar(App& a, Rectangle r) {
     DrawRectangle((int)r.x, (int)(r.y + r.height - 1), (int)r.width, 1, theme::rule);
     float x = r.x + 26;
     if (a.shelf == Shelf::OpenDoctrines) {
-        for (auto& t : kTabs) {
+        std::vector<TabDef> tabs(std::begin(kTabs), std::end(kTabs));
+        if (uadmin::isAdmin()) tabs.push_back({Tab::Admin, "Admin", Icon::Shield});
+        for (auto& t : tabs) {
             const char* label = T(t.label);
             const float w = utext::measure(label, 16).x;
             Rectangle hit{x - 8, r.y, w + 16, r.height};
@@ -350,8 +435,21 @@ static void drawTopBar(App& a, Rectangle r) {
         {"itch.io", Icon::Star, "https://pr1nted.itch.io/open-doctrines"},
     };
     float lx = r.x + r.width - 16;
+    if (uwindow::needsOwnControls()) {
+        // No title bar in borderless fullscreen: draw the two controls it took.
+        if (ui::iconButton({lx - 40, r.y + 12, 40, 40}, Icon::Cross, T("Quit"))) a.wantsQuit = true;
+        lx -= 44;
+        if (ui::iconButton({lx - 40, r.y + 12, 40, 40}, Icon::Box, T("Leave fullscreen (Esc)"))) a.toggleFullscreen();
+        lx -= 52;
+    }
     Rectangle con{lx - 40, r.y + 12, 40, 40};
     if (ui::iconButton(con, Icon::Terminal, T("Console"), a.consoleOpen)) a.consoleOpen = !a.consoleOpen;
+    lx -= 44;
+    if (ui::iconButton({lx - 40, r.y + 12, 40, 40}, Icon::Bug, T("Report a problem"))) a.openFeedback(true);
+    lx -= 44;
+    // Support, on Ko-fi. One quiet icon among the others: no badge, no
+    // animation, never a pop-up. It is there for whoever goes looking.
+    if (ui::iconButton({lx - 40, r.y + 12, 40, 40}, Icon::Heart, T("Support Open Doctrines on Ko-fi"))) uproc::openUrl("https://ko-fi.com/pr1nted");
     lx -= 48;
     for (auto& l : links) {
         Rectangle b{lx - 40, r.y + 12, 40, 40};
@@ -404,6 +502,22 @@ void App::frame() {
     time += GetFrameTime();
     utext::frame();
     pollRunning();
+    // Discord: the launcher steps aside while Open Doctrines runs (the game
+    // publishes its own presence); for the other games it speaks for them.
+    {
+        static long long otherSince = 0;
+        if (running && running->child && running->child->running()) udiscord::clear();
+        else if (other) {
+            if (!otherSince) otherSince = (long long)std::time(nullptr);
+            udiscord::set(std::string(T("Playing")) + " " + otherName, T("via Unifico"), otherSince);
+        } else {
+            otherSince = 0;
+            const char* where = tab == Tab::Achievements ? T("Looking at achievements") : tab == Tab::Installs ? T("Choosing a version")
+                              : tab == Tab::Worlds ? T("Looking through worlds") : tab == Tab::Mods ? T("Browsing mods") : T("In the launcher");
+            udiscord::set(where, "Open Doctrines", 0);
+        }
+        udiscord::tick(GetTime());
+    }
     if (!updateKnown && updateJob && updateJob->done) updateJob.reset();
     if (releasesJob && releasesJob->done) { releases = ureleases::cached(); releasesJob.reset(); }
     if (newsJob && newsJob->done) { news = unews::cached(); newsJob.reset(); }
@@ -427,6 +541,9 @@ void App::frame() {
     // so fullscreen on a large display is the same launcher at a readable size
     // rather than small text in a sea of space. A fixed size in Settings wins.
     if (IsKeyPressed(KEY_F11)) toggleFullscreen();
+    // Esc always leaves a borderless fullscreen: with no title bar it is the
+    // one exit a person will try. (Text fields and modals use Esc first.)
+    if (IsKeyPressed(KEY_ESCAPE) && uwindow::needsOwnControls() && !modal && ui::focusedField() < 0) toggleFullscreen();
     {
         float s;
         const std::string& pref = Settings::get().uiScale;
@@ -450,7 +567,8 @@ void App::frame() {
     cam.zoom = ui::scale();
     BeginMode2D(cam);
     ui::beginFrame();
-    ui::setInput(!modal);
+    // --screenshots must not be steered by whoever's mouse is over the window.
+    ui::setInput(!modal && shotDir.empty());
     art::backdrop({0, 0, W, H}, time);
 
     const float consoleH = consoleOpen ? 260.0f : 0.0f;
@@ -493,8 +611,9 @@ void App::frame() {
         case Tab::Account: drawAccount(*this, content); break;
         case Tab::Settings: drawSettings(*this, content); break;
         case Tab::Tools: drawTools(*this, content); break;
+        case Tab::Admin: drawAdmin(*this, content); break;
     }
-    EndScissorMode();
+    ui::endScissor();
     if (consoleOpen) drawConsole(*this, {kRail, H - consoleH, W - kRail, consoleH});
 
     ui::deferredOverlays();
@@ -519,7 +638,8 @@ void App::screenshotStep() {
         {Tab::Play, Shelf::OpenDoctrines, "play"}, {Tab::Installs, Shelf::OpenDoctrines, "installations"},
         {Tab::Worlds, Shelf::OpenDoctrines, "worlds"}, {Tab::Mods, Shelf::OpenDoctrines, "mods"},
         {Tab::Achievements, Shelf::OpenDoctrines, "achievements"}, {Tab::Servers, Shelf::OpenDoctrines, "servers"},
-        {Tab::Account, Shelf::OpenDoctrines, "account"}, {Tab::Settings, Shelf::OpenDoctrines, "settings"},
+        {Tab::Account, Shelf::OpenDoctrines, "account"},
+        {Tab::Admin, Shelf::OpenDoctrines, "admin"}, {Tab::Settings, Shelf::OpenDoctrines, "settings"},
         {Tab::Tools, Shelf::OpenDoctrines, "tools"}, {Tab::Play, Shelf::TempleOS, "templeos"},
         {Tab::Play, Shelf::Unciv, "unciv"},
     };

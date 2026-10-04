@@ -14,6 +14,7 @@ std::vector<World> g_worlds;
 std::string g_forDir;
 double g_loadedAt = 0;
 int g_renaming = -1;
+std::string g_query;
 std::string g_newName;
 
 bool gameUsing(App& a, const Install& i) {
@@ -73,7 +74,9 @@ void drawWorlds(App& a, Rectangle r) {
         }
     }
     if (ui::button({bx, y, 130, 36}, T("Open folder"), ui::Style::Ghost)) uproc::revealInFileManager(inst.dataDir + "/saves");
-    y += 56;
+    y += 50;
+    ui::searchField({x, y, std::min(420.0f, w), 38}, g_query, 4500);
+    y += 52;
 
     Rectangle list{r.x, y, r.width, r.y + r.height - y};
     ui::beginScroll(list, g_scroll);
@@ -81,6 +84,7 @@ void drawWorlds(App& a, Rectangle r) {
     if (g_worlds.empty()) utext::draw(T("No worlds yet. Start one in the game and it appears here."), x, yy + 10, 15, theme::faint);
     for (size_t k = 0; k < g_worlds.size(); ++k) {
         const World& wd = g_worlds[k];
+        if (!ui::matches(wd.name + " " + wd.file + " " + wd.version, g_query)) continue;
         Rectangle card{x, yy, w, 78};
         ui::card(card);
         if ((int)k == g_renaming) {
@@ -134,7 +138,7 @@ void drawWorlds(App& a, Rectangle r) {
                     yy2 += 46;
                     if (yy2 > m.y + m.height - 60) break;
                 }
-                if (ui::button({m.x + m.width - 124, m.y + m.height - 54, 100, 36}, T("Cancel"), ui::Style::Ghost) || IsKeyPressed(KEY_ESCAPE)) keep = false;
+                if (ui::button({m.x + m.width - 124, m.y + m.height - 54, 100, 36}, T("Cancel"), ui::Style::Ghost) || ui::escapePressed()) keep = false;
                 return keep;
             };
         }

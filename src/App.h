@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-enum class Tab { Play, Installs, Worlds, Mods, Achievements, Servers, Account, Settings, Tools };
+enum class Tab { Play, Installs, Worlds, Mods, Achievements, Servers, Account, Settings, Tools, Admin };
 enum class Shelf { OpenDoctrines, Unciv, Gd5, Gd4, TempleOS };
 
 struct Toast { std::string text; bool error = false; double until = 0; };
@@ -50,6 +50,7 @@ struct App {
     std::unique_ptr<ulaunch::Running> running;
     std::unique_ptr<uproc::Child> other;     // Unciv, GD5, TempleOS
     std::string otherName;
+    double otherStartedAt = 0;
     bool hidden = false;
     void play(const std::string& extraArg = {});
     void stop();
@@ -69,6 +70,8 @@ struct App {
     std::vector<Toast> toasts;
     void toast(const std::string& text, bool error = false);
     void toggleFullscreen();
+    /** The "Report a problem" form, as a modal. */
+    void openFeedback(bool bug = true);
     void confirm(const std::string& title, const std::string& body, const std::string& yes,
                  std::function<void()> onYes, bool danger = false);
 
@@ -97,6 +100,10 @@ void drawServers(App& a, Rectangle r);
 void drawAccount(App& a, Rectangle r);
 void drawSettings(App& a, Rectangle r);
 void drawTools(App& a, Rectangle r);
+void drawAdmin(App& a, Rectangle r);
+struct Sanction;
+/** Bans, timeouts and restrictions as cards (AdminTab.cpp; the Account page uses it too). */
+void drawSanctionHistory(const std::vector<Sanction>& list, float x, float& y, float w);
 void drawOtherGame(App& a, Rectangle r);
 void drawConsole(App& a, Rectangle r);
 

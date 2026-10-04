@@ -41,5 +41,5 @@ void drawConsole(App& a, Rectangle r) {
         else if (l.find("WARN") != std::string::npos) c = Color{220, 190, 110, 255};
         utext::draw(utext::ellipsize(l, body.width - 16, 14), body.x + 8, body.y + (i - start) * lh, 14, c);
     }
-    EndScissorMode();
+    ui::endScissor();
 }

@@ -16,6 +16,9 @@ namespace {
 std::mutex g_mutex;
 std::string g_issuer;
 json g_queue = json::array();
+// One per launcher run: GA shows Measurement Protocol events in Realtime and
+// sessions only when they carry one. Identifies this run, never a person.
+const long long g_session = []() { std::random_device rd; return (long long)(rd() & 0x7fffffff) + 1; }();
 
 std::string newClientId() {
     std::random_device rd;
@@ -65,7 +68,7 @@ void flush() {
         batch = g_queue;
         g_queue = json::array();
     }
-    const std::string body = json{{"client_id", s.analyticsClientId}, {"events", batch}}.dump();
+    const std::string body = json{{"client_id", s.analyticsClientId}, {"session_id", g_session}, {"events", batch}}.dump();
     const std::string url = g_issuer + "/analytics/event";
     ujobs::run("analytics", [url, body](Job&) { return uhttp::postJson(url, body).ok(); });
 }

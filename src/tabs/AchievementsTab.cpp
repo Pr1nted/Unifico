@@ -12,6 +12,7 @@
 namespace {
 ui::Scroll g_scroll;
 int g_filter = 0;
+std::string g_query;
 const char* catLabel(const char* c) {
     if (!std::strcmp(c, "meta")) return T("Head of State");
     if (!std::strcmp(c, "war")) return T("Warfare");
@@ -34,6 +35,7 @@ void drawAchievements(App& a, Rectangle r) {
     float y = r.y + 28;
     art::banner({r.x, r.y, r.width, 120}, 5, a.time);
     ui::heading(T("Achievements"), x, y, 30);
+    ui::searchField({x + w - 340, y + 2, 300, 38}, g_query, 4700);
     auto rows = uach::view();
     int got = 0;
     for (auto& v : rows) got += v.granted;
@@ -100,6 +102,8 @@ void drawAchievements(App& a, Rectangle r) {
     int k = 0;
     for (auto& v : rows) {
         if (g_filter > 0 && std::strcmp(v.def->cat, odach::kCategories[g_filter - 1]) != 0) continue;
+        // Searching hidden ones by their real name would be a spoiler.
+        if (!g_query.empty() && (v.def->hidden && !v.granted ? true : !ui::matches(std::string(T(v.def->name)) + " " + T(v.def->desc), g_query))) continue;
         const float gx = x + (k % cols) * (cw + gap), gy = y + (k / cols) * (ch + gap) - g_scroll.y;
         ++k;
         if (gy > grid.y + grid.height || gy + ch < grid.y) continue;

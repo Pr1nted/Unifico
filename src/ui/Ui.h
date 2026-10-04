@@ -35,7 +35,7 @@ inline const Color ok{94, 170, 110, 255};
 }  // namespace theme
 
 enum class Icon { Play, Box, Globe, Puzzle, Trophy, Server, User, Gear, Tools, Terminal, News,
-                  Folder, Trash, Download, Link, Stop, Check, Cross, Map, Cpu, Lock, Star };
+                  Folder, Trash, Download, Link, Stop, Check, Cross, Map, Cpu, Lock, Star, Bug, Heart, Shield };
 
 namespace ui {
 void beginFrame();
@@ -49,6 +49,8 @@ float W();                     // window size in logical units
 float H();
 /** BeginScissorMode, in logical units. */
 void scissor(int x, int y, int w, int h);
+/** Pop the last clip, restoring the one around it (never EndScissorMode directly). */
+void endScissor();
 bool hovered(Rectangle r);
 bool clicked(Rectangle r);          // released over r, pressed over r too
 /** True while a modal is open: everything outside it ignores the mouse. */
@@ -63,6 +65,12 @@ bool toggle(Rectangle r, const char* label, bool* value, const char* hint = null
 bool slider(Rectangle r, float* value, float min, float max, const char* fmt);
 /** Single-line text field. `id` keeps focus stable across frames. */
 bool textField(Rectangle r, std::string& text, int id, const char* placeholder = nullptr, bool secret = false);
+/** Multi-line text; Enter is a new line, Esc or a click elsewhere ends editing. */
+bool textArea(Rectangle r, std::string& text, int id, const char* placeholder = nullptr);
+/** A text field that says "Search", with a clear button. */
+bool searchField(Rectangle r, std::string& text, int id);
+/** Whether `haystack` contains `query`, ignoring case. Empty query matches. */
+bool matches(const std::string& haystack, const std::string& query);
 /** Drop-down; returns the selected index, possibly changed. */
 int dropdown(Rectangle r, const std::vector<std::string>& items, int selected, int id);
 void progress(Rectangle r, float p, const char* label = nullptr);
@@ -83,5 +91,7 @@ float heading(const std::string& s, float x, float y, float size = 30);
 /** Drawn last, above everything: dropdown lists and tooltips. */
 void deferredOverlays();
 int focusedField();
+/** Esc, unless a text field used it to stop editing this frame. */
+bool escapePressed();
 void clearFocus();
 }  // namespace ui

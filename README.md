@@ -20,10 +20,11 @@ Windows, Linux, FreeBSD and OpenBSD.
 | **Mods** | Turn installed mods on and off, remove them, install from a file or from the community directory. Directory downloads are checked against the author's declared checksum. |
 | **Achievements** | The same collection the game shows. Only grants signed by the account service count, and each one is verified locally (see *Achievements* below). |
 | **Servers** | The servers each version has joined, and an invite-code box. Starting one launches the game straight into it. |
-| **Account** | Sign in once. Every version you start opens already signed in, and a sign-in made inside the game is picked up afterwards. |
+| **Account** | Sign in once. Every version you start opens already signed in, and a sign-in made inside the game is picked up afterwards. The account's standing is shown too: every ban, timeout or restriction it has had, why, and when it ends. |
+| **Admin** | For accounts with the developer badge only: write and edit the news board, work through the report queue, and look somebody up to time them out, ban or pardon them. The service checks the badge on every request; the launcher holds no secret. |
 | **Settings** | The launcher's own settings, plus each version's `config.json` as a form. Keys the game adds later appear here without a launcher release. Also a disk-use report, privacy settings, and **Uninstall everything**. |
 | **Tools** | The map translator ([open-dragoman](https://github.com/Pr1nted/dragoman), linked in): `.odmap` ↔ Greater Diplomacy 5 ↔ Unciv. Plus logs, the console, and downloading a log file. |
-| **TempleOS edition** | Fetches the TempleOS live CD and the game's TempleOS release, builds a CD of the game, boots QEMU, and can type the commands for you. |
+| **TempleOS edition** | One Play button. It checks that QEMU is installed and starts, fetches the TempleOS live CD and the game's TempleOS release, puts the game on a small FAT32 disk, boots QEMU and types its way into the game, watching the screen to know when each prompt is ready. Every step is also a button, for when the automatic start gets stuck. |
 | **News** | The announcement board the game's main menu shows, from the same service. |
 
 ### The hidden shelf
@@ -44,6 +45,22 @@ launcher, like the game, holds only the public keys (`-DOD_ACHIEVEMENT_KEYS`),
 so it can check a grant but never make one. Unsigned or altered entries,
 whether in a file or an imported `.odstate`, are ignored. The full design is
 in Open Doctrines' `docs/achievements.md`.
+
+## TempleOS
+
+TempleOS 5.03 reads two filesystems: its own RedSea, and FAT32. A second CD in
+ordinary ISO9660 mounts, and then answers every request with "File System Not
+Supported". So the game goes on a 64 MB FAT32 hard disk that the launcher
+writes itself (`utemple::writeFat32`), with no system tools needed. It is
+rebuilt at every boot. The unattended start answers the two boot questions,
+then runs `Mount` (drive letter `C`, probe, drive 1), `Cd("C:/");`, and
+`#include "ODGame"` followed by `ODStart;`. The shell holds an `#include` until
+the next statement arrives, so the two lines go together.
+
+```bash
+Unifico --templeos-disk <folder> <out.img>     # the disk, to inspect with ordinary tools
+Unifico --templeos-selftest <out.ppm>          # boot, start the game, save the screen
+```
 
 ## Updating itself
 
