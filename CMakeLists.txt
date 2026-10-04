@@ -214,6 +214,20 @@ if(WIN32)
     # The runtime library (one self-contained exe, no VC++ redistributable) is
     # set once for the whole build, up beside FetchContent. Setting it on this
     # target alone is what broke the Windows link; see the note there.
+    if(MSVC)
+        # add_executable(... WIN32) above picks the windowed subsystem, which
+        # is what stops a console appearing behind the launcher. It also makes
+        # the linker look for WinMain(), which this program does not have -- it
+        # has an ordinary main() -- so the link failed with "unresolved
+        # external symbol WinMain". MinGW hides this behind a WinMain shim of
+        # its own; MSVC does not.
+        #
+        # /ENTRY:mainCRTStartup keeps the windowed subsystem and points the
+        # entry back at the CRT startup that calls main(), which is the
+        # combination actually wanted. The game reached the same conclusion --
+        # see the matching note in Open Doctrines' CMakeLists.txt.
+        target_link_options(Unifico PRIVATE "/ENTRY:mainCRTStartup")
+    endif()
 else()
     find_package(CURL REQUIRED)
     target_link_libraries(Unifico PRIVATE CURL::libcurl)
