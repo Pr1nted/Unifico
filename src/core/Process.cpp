@@ -247,11 +247,25 @@ bool Child::start(const Spec& spec, std::string* error) {
         close(fds[0]);
         close(fds[1]);
         if (!cwd.empty() && chdir(cwd.c_str()) != 0) _exit(126);
-#if !defined(__APPLE__)
+        // The memory limit, where the system has one to set.
+        //
+        // RLIMIT_AS is not universal. macOS has the name but enforcing it
+        // breaks the dynamic loader, so it was already excluded. OpenBSD does
+        // not define it at all, and the launcher stopped compiling there on
+        // this line -- the name is the portable-looking one, not the portable
+        // one. RLIMIT_DATA is what OpenBSD bounds a process's own allocations
+        // with, so it is the honest substitute; where neither exists the limit
+        // is simply not applied, which is what asking for one on a system that
+        // cannot impose it should do.
+#if !defined(__APPLE__) && (defined(RLIMIT_AS) || defined(RLIMIT_DATA))
         if (memMB > 0) {
             struct rlimit rl;
             rl.rlim_cur = rl.rlim_max = (rlim_t)memMB * 1024 * 1024;
+#if defined(RLIMIT_AS)
             setrlimit(RLIMIT_AS, &rl);
+#else
+            setrlimit(RLIMIT_DATA, &rl);
+#endif
         }
 #endif
         execve(argv[0], argv.data(), envp.data());

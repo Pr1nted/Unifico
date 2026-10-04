@@ -45,6 +45,23 @@ configure_file(src/gen/AccountIssuer.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated
 
 include(FetchContent)
 
+# ── THE MSVC RUNTIME IS CHOSEN HERE, NOT ON THE TARGET ──
+#
+# "One self-contained exe" means /MT, and that was set as a property on the
+# Unifico target alone -- below, after raylib and dragoman had already been
+# declared. A FetchContent dependency is a target like any other: it took the
+# default /MD, and the link then failed on every Windows runner with LNK2038,
+# "MD_DynamicRelease doesn't match MT_StaticRelease in main.obj", once for
+# every object in dragoman_static.lib.
+#
+# The runtime has to be one decision for the whole build, so it is made before
+# anything is declared. CMP0091 (NEW since the 3.20 minimum above) is what
+# makes this variable the default for targets created afterwards, including
+# fetched ones.
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 # ---- raylib, trimmed ----
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_GAMES OFF CACHE BOOL "" FORCE)
@@ -194,10 +211,9 @@ if(WIN32)
     # Windows 10 is the floor (as for the game): IFileDialog and
     # GetUserDefaultLocaleName are Vista-era calls MinGW hides below 0x0600.
     target_compile_definitions(Unifico PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS _WIN32_WINNT=0x0A00 WINVER=0x0A00)
-    if(MSVC)
-        # One self-contained exe: no VC++ redistributable to install first.
-        set_property(TARGET Unifico PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-    endif()
+    # The runtime library (one self-contained exe, no VC++ redistributable) is
+    # set once for the whole build, up beside FetchContent. Setting it on this
+    # target alone is what broke the Windows link; see the note there.
 else()
     find_package(CURL REQUIRED)
     target_link_libraries(Unifico PRIVATE CURL::libcurl)
