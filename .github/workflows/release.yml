@@ -1,0 +1,38 @@
+# Tag vX.Y.Z -> build everything, publish a GitHub release with one zip per
+# platform. The launcher's self-updater reads exactly these asset names
+# (src/update/SelfUpdate.cpp: Unifico-<platform>.zip), and GitHub's per-asset
+# SHA-256 digest is what it checks a download against.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml
+    with:
+      release: true
+
+  publish:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Version matches the tag
+        run: |
+          v="$(cat VERSION)"
+          [ "v$v" = "${GITHUB_REF_NAME}" ] || { echo "::error::VERSION says $v, tag is ${GITHUB_REF_NAME}"; exit 1; }
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --title "Unifico ${GITHUB_REF_NAME#v}" \
+            --notes "Download the zip for your system, unpack it, and run Unifico. It keeps itself up to date from then on." \
+            artifacts/**/*.zip

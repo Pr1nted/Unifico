@@ -1,0 +1,4 @@
+#pragma once
+// The same macro name Open Doctrines' GrantVerify.cpp reads, so the launcher
+// carries that file byte-for-byte unchanged apart from its include paths.
+#define OD_ACHIEVEMENT_KEYS_BAKED "@OD_ACHIEVEMENT_KEYS@"

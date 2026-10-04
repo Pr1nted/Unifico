@@ -1,0 +1,116 @@
+# Every platform Open Doctrines ships on, on every push. TempleOS is the one
+# exception, and not by omission: Unifico RUNS the TempleOS edition (in QEMU)
+# rather than running ON TempleOS.
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_call:
+    inputs:
+      release:
+        type: boolean
+        default: false
+
+jobs:
+  # The achievement catalog lives in the game's repository and is generated
+  # into both. Nothing here could tell that this copy had gone stale, so the
+  # game's own generator is run against this checkout.
+  catalog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: Pr1nted/Open-Doctrines
+          path: .open-doctrines
+      - name: Achievement catalog matches the game's
+        run: tools/check_catalog.sh "$GITHUB_WORKSPACE/.open-doctrines"
+
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14,         tag: macos-arm64,   cmake: "-DCMAKE_OSX_ARCHITECTURES=arm64" }
+          - { os: macos-14,         tag: macos-x64,     cmake: "-DCMAKE_OSX_ARCHITECTURES=x86_64" }
+          - { os: windows-latest,   tag: windows-x64,   cmake: "-A x64" }
+          - { os: windows-11-arm,   tag: windows-arm64, cmake: "-A ARM64" }
+          - { os: ubuntu-22.04,     tag: linux-x64,     cmake: "" }
+          - { os: ubuntu-22.04-arm, tag: linux-arm64,   cmake: "" }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcurl4-openssl-dev libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev
+      - name: Configure
+        shell: bash
+        run: >
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release ${{ matrix.cmake }}
+          "-DOD_ACHIEVEMENT_KEYS=${{ vars.OD_ACHIEVEMENT_KEYS }}"
+      - name: Build
+        run: cmake --build build --config Release -j 4
+      - name: Test
+        shell: bash
+        run: |
+          cmake --build build --config Release --target UnificoTest -j 4
+          t=build/UnificoTest; [ -f build/Release/UnificoTest.exe ] && t=build/Release/UnificoTest.exe
+          "$t" .
+      - name: Strings are extracted
+        run: python3 tools/extract_strings.py --check
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist
+          case "${{ runner.os }}" in
+            macOS)   ditto -c -k --keepParent build/Unifico.app "dist/Unifico-${{ matrix.tag }}.zip" ;;
+            Windows) cp build/Release/Unifico.exe dist/ && (cd dist && 7z a "Unifico-${{ matrix.tag }}.zip" Unifico.exe && rm Unifico.exe) ;;
+            Linux)   mkdir -p pkg && cp build/Unifico packaging/linux/unifico.desktop packaging/linux/unifico.png pkg/ &&
+                     (cd pkg && zip -q "../dist/Unifico-${{ matrix.tag }}.zip" *) ;;
+          esac
+          ls -lh dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Unifico-${{ matrix.tag }}
+          path: dist/*.zip
+
+  bsd:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { bsd: freebsd, tag: freebsd-x64 }
+          - { bsd: openbsd, tag: openbsd-x64 }
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build in a real ${{ matrix.bsd }} VM
+        if: matrix.bsd == 'freebsd'
+        uses: vmactions/freebsd-vm@v1
+        with:
+          usesh: true
+          prepare: pkg install -y cmake git python3 curl libX11 libXrandr libXinerama libXcursor libXi mesa-libs zip
+          run: |
+            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "-DOD_ACHIEVEMENT_KEYS=${{ vars.OD_ACHIEVEMENT_KEYS }}"
+            cmake --build build -j 4
+            mkdir -p dist pkg && cp build/Unifico packaging/linux/unifico.desktop packaging/linux/unifico.png pkg/
+            cd pkg && zip -q ../dist/Unifico-${{ matrix.tag }}.zip *
+      - name: Build in a real ${{ matrix.bsd }} VM
+        if: matrix.bsd == 'openbsd'
+        uses: vmactions/openbsd-vm@v1
+        with:
+          usesh: true
+          prepare: pkg_add cmake git python3 curl zip
+          run: |
+            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "-DOD_ACHIEVEMENT_KEYS=${{ vars.OD_ACHIEVEMENT_KEYS }}"
+            cmake --build build -j 4
+            mkdir -p dist pkg && cp build/Unifico packaging/linux/unifico.desktop packaging/linux/unifico.png pkg/
+            cd pkg && zip -q ../dist/Unifico-${{ matrix.tag }}.zip *
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Unifico-${{ matrix.tag }}
+          path: dist/*.zip

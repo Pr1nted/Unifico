@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Unifico
+GenericName=Open Doctrines launcher
+Comment=Install, play and manage Open Doctrines
+Exec=Unifico
+Icon=unifico
+Categories=Game;StrategyGame;
+Terminal=false
