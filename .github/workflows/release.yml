@@ -36,3 +36,51 @@ jobs:
           gh release create "$GITHUB_REF_NAME" --title "Unifico ${GITHUB_REF_NAME#v}" \
             --notes "Download the zip for your system, unpack it, and run Unifico. It keeps itself up to date from then on." \
             artifacts/**/*.zip
+
+      # The launcher goes on the GAME's itch page, as an extra set of uploads
+      # beside the game's own.
+      #
+      # WHY THE SAME PAGE AND NOT ITS OWN. Somebody looking for Open Doctrines
+      # should not have to know the launcher exists, and somebody who wants it
+      # should not have to find a second page. One page, two kinds of download,
+      # and the game's are listed first so the plain one stays the obvious one.
+      #
+      # WHY A SEPARATE CHANNEL PER PLATFORM. butler replaces whatever is on a
+      # channel, so putting the launcher on the game's channel would REPLACE
+      # the game. The names are prefixed instead: launcher-windows-x64 sits
+      # beside windows-x64. itch still reads the platform out of the channel
+      # name, so each upload is tagged for the right system.
+      #
+      # NO MANAGED MARKER. The game gets one so that two updaters do not write
+      # the same directory. The launcher updates itself from its own GitHub
+      # release and the itch app would be the second writer -- but a player who
+      # takes the launcher from itch is choosing the itch app to manage it, so
+      # the marker belongs here too once the launcher reads one. It does not
+      # yet; until it does, this is a copy that self-updates, which is the
+      # behaviour it has always had.
+      - name: Push to the game's itch.io page
+        env:
+          BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
+          ITCH_TARGET: ${{ vars.ITCH_TARGET }}   # e.g. pr1nted/open-doctrines
+        run: |
+          if [ -z "$BUTLER_API_KEY" ]; then
+            echo "::warning title=itch.io skipped::BUTLER_API_KEY is not set on \
+            this repository, so nothing was pushed to itch.io. The GitHub \
+            release above is complete and this is not a failure."
+            exit 0
+          fi
+          if [ -z "$ITCH_TARGET" ]; then
+            echo "::warning title=itch.io skipped::ITCH_TARGET repository \
+            variable is not set (expected user/game). Skipping."
+            exit 0
+          fi
+          curl -sL -o butler.zip \
+            https://broth.itch.zone/butler/linux-amd64/LATEST/archive/default
+          unzip -q butler.zip && chmod +x butler
+          for z in artifacts/**/*.zip; do
+            name=$(basename "$z" .zip)
+            channel="launcher-$(printf '%s' "$name" | sed 's/^Unifico-//')"
+            echo "pushing $z -> $ITCH_TARGET:$channel"
+            ./butler push "$z" "$ITCH_TARGET:$channel" \
+                     --userversion "${GITHUB_REF_NAME#v}"
+          done
