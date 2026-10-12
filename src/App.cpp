@@ -61,7 +61,7 @@ void App::init(int argc, char** argv) {
     uanalytics::init(UNIFICO_ACCOUNT_ISSUER);
     udiscord::init(UNIFICO_DISCORD_APP_ID);
 
-    SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_WINDOW_HIGHDPI | FLAG_MSAA_4X_HINT | FLAG_VSYNC_HINT);
+    SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_WINDOW_HIGHDPI | FLAG_VSYNC_HINT);
     SetTraceLogLevel(LOG_WARNING);
     InitWindow(1220, 760, "Unifico");
     SetWindowMinSize(960, 600);
@@ -518,6 +518,16 @@ void App::frame() {
         }
         udiscord::tick(GetTime());
     }
+    {
+        // Achievements, live: what the game writes shows here within seconds,
+        // and every new confirmation gets a toast.
+        static std::vector<std::string> dirs;
+        static double dirsAt = -1e9;
+        if (GetTime() - dirsAt > 5) { dirs = allDataDirs(); dirsAt = GetTime(); }
+        uach::tick(dirs, GetTime(), running != nullptr || tab == Tab::Achievements);
+        for (auto& id : uach::takeNewlyConfirmed())
+            toast(std::string(T("Achievement confirmed:")) + " " + T(uach::nameOf(id)));
+    }
     if (!updateKnown && updateJob && updateJob->done) updateJob.reset();
     if (releasesJob && releasesJob->done) { releases = ureleases::cached(); releasesJob.reset(); }
     if (newsJob && newsJob->done) { news = unews::cached(); newsJob.reset(); }
@@ -533,7 +543,17 @@ void App::frame() {
         EndDrawing();
         return;
     }
-    SetTargetFPS(IsWindowFocused() ? 60 : 24);
+    // Full rate only while someone is using the window. The animations are
+    // slow drifts timed by GetFrameTime, so 20 fps idle looks the same.
+    {
+        static double lastInput = 0;
+        const Vector2 md = GetMouseDelta();
+        bool input = md.x != 0 || md.y != 0 || GetMouseWheelMove() != 0 || ui::focusedField() >= 0;
+        for (int b = MOUSE_BUTTON_LEFT; b <= MOUSE_BUTTON_MIDDLE && !input; ++b) input = IsMouseButtonDown(b);
+        for (int k = KEY_SPACE; k <= KEY_KB_MENU && !input; ++k) input = IsKeyDown(k);
+        if (input) lastInput = GetTime();
+        SetTargetFPS(IsWindowMinimized() ? 2 : !IsWindowFocused() ? 10 : GetTime() - lastInput < 3 ? 60 : 20);
+    }
 
     // ── SIZE ──
     // F11 (or the Settings switch) for fullscreen. The interface zoom follows

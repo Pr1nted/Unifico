@@ -24,6 +24,11 @@ struct AchView {
 
 namespace uach {
 void refresh(const std::vector<std::string>& dataDirs);
+/** Every frame: re-read when the game's files change, ask the service now and then. */
+void tick(const std::vector<std::string>& dataDirs, double now, bool watching);
+/** Achievements confirmed since the last call (ids), for a toast. */
+std::vector<std::string> takeNewlyConfirmed();
+const char* nameOf(const std::string& id);
 std::vector<AchView> view();
 int grantedCount();
 bool keysBaked();

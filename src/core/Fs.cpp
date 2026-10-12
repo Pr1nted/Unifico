@@ -11,6 +11,11 @@ bool readFile(const std::string& path, std::string& out) {
     std::FILE* f = std::fopen(path.c_str(), "rb");
     if (!f) return false;
     out.clear();
+    if (std::fseek(f, 0, SEEK_END) == 0) {
+        const long sz = std::ftell(f);
+        if (sz > 0) out.reserve((size_t)sz);
+        std::rewind(f);
+    }
     char buf[65536];
     size_t n;
     while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) out.append(buf, n);

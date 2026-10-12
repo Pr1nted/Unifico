@@ -12,6 +12,7 @@
 #include <map>
 #include <set>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -28,7 +29,12 @@ const int kBuckets[] = {20, 28, 36, 48, 64, 84, 110, 144, 190};
 struct Atlas {
     Font font{};
     bool ok = false;
+    std::unordered_map<int, int> index;   // codepoint -> glyph; raylib's GetGlyphIndex is a linear scan
 };
+
+// Line breaks per (text, width, size, face): drawWrapped re-measured every
+// paragraph word by word, every frame.
+std::unordered_map<std::string, std::vector<std::string>> g_wrapCache;
 
 struct FaceData {
     const std::string* ttf = nullptr;   // embedded bytes
@@ -92,6 +98,8 @@ Atlas buildAtlas(const std::string& ttf, const std::vector<int>& cps, int px) {
                                 const_cast<int*>(cps.data()), (int)cps.size());
     a.ok = a.font.texture.id != 0;
     if (a.ok) {
+        a.index.reserve((size_t)a.font.glyphCount);
+        for (int i = 0; i < a.font.glyphCount; ++i) a.index.emplace(a.font.glyphs[i].value, i);
         GenTextureMipmaps(&a.font.texture);
         SetTextureFilter(a.font.texture, TEXTURE_FILTER_TRILINEAR);
     }
@@ -209,6 +217,7 @@ void clearAtlases() {
     }
     for (auto& [px, a] : g_fallbackAtlases) if (a.ok) UnloadFont(a.font);
     g_fallbackAtlases.clear();
+    g_wrapCache.clear();
 }
 
 bool needsShaping(const std::vector<int>& cps) {
@@ -224,18 +233,33 @@ std::vector<int> shaped(const std::string& s) {
     return std::vector<int>(u.begin(), u.end());
 }
 
-struct Pick { Font* font; float scale; };
+struct Pick { Font* font; float scale; const Atlas* atlas; };
+
+int glyphOf(const Pick& p, int cp) {
+    auto it = p.atlas->index.find(cp);
+    if (it == p.atlas->index.end()) it = p.atlas->index.find('?');   // as GetGlyphIndex falls back
+    return it == p.atlas->index.end() ? 0 : it->second;
+}
+
+// DrawTextCodepoint, minus its second GetGlyphIndex scan.
+void drawGlyph(const Font& font, int gi, Vector2 pos, float size, Color tint) {
+    const float k = size / font.baseSize, pad = (float)font.glyphPadding;
+    const Rectangle& r = font.recs[gi];
+    const Rectangle dst{pos.x + font.glyphs[gi].offsetX * k - pad * k, pos.y + font.glyphs[gi].offsetY * k - pad * k,
+                        (r.width + 2 * pad) * k, (r.height + 2 * pad) * k};
+    DrawTexturePro(font.texture, {r.x - pad, r.y - pad, r.width + 2 * pad, r.height + 2 * pad}, dst, {0, 0}, 0, tint);
+}
 
 Pick pick(int cp, Face f, float size) {
     const int px = bucketFor(size);
     if (g_faces[f].has.count(cp)) {
         Atlas& a = primaryAtlas(f, px);
-        if (a.ok) return {&a.font, size / (float)a.font.baseSize};
+        if (a.ok) return {&a.font, size / (float)a.font.baseSize, &a};
     }
     if (g_fallbackHas.count(cp)) {
         if (std::find(g_fallbackCps.begin(), g_fallbackCps.end(), cp) != g_fallbackCps.end()) {
             Atlas& a = fallbackAtlas(px);
-            if (a.ok) return {&a.font, size / (float)a.font.baseSize};
+            if (a.ok) return {&a.font, size / (float)a.font.baseSize, &a};
         } else {
             g_missing.insert(cp);
         }
@@ -243,7 +267,7 @@ Pick pick(int cp, Face f, float size) {
         g_missing.insert(cp);
     }
     Atlas& a = primaryAtlas(f, px);
-    return {a.ok ? &a.font : nullptr, a.ok ? size / (float)a.font.baseSize : 1.0f};
+    return {a.ok ? &a.font : nullptr, a.ok ? size / (float)a.font.baseSize : 1.0f, &a};
 }
 }  // namespace
 
@@ -306,7 +330,7 @@ Vector2 measure(const std::string& s, float size, Face f) {
     for (int cp : shaped(s)) {
         Pick p = pick(cp, f, size);
         if (!p.font) continue;
-        int gi = GetGlyphIndex(*p.font, cp);
+        int gi = glyphOf(p, cp);
         const GlyphInfo& g = p.font->glyphs[gi];
         float adv = g.advanceX ? (float)g.advanceX : p.font->recs[gi].width;
         w += adv * p.scale;
@@ -320,18 +344,39 @@ float draw(const std::string& s, float x, float y, float size, Color c, Face f) 
     for (int cp : shaped(s)) {
         Pick p = pick(cp, f, size);
         if (!p.font) continue;
-        int gi = GetGlyphIndex(*p.font, cp);
+        int gi = glyphOf(p, cp);
         const GlyphInfo& g = p.font->glyphs[gi];
-        if (cp != ' ' && cp != '\t') DrawTextCodepoint(*p.font, cp, {std::round(pen), std::round(y)}, size, c);
+        if (cp != ' ' && cp != '\t') drawGlyph(*p.font, gi, {std::round(pen), std::round(y)}, size, c);
         float adv = g.advanceX ? (float)g.advanceX : p.font->recs[gi].width;
         pen += adv * p.scale;
     }
     return pen - x;
 }
 
+static std::vector<std::string> wrapLines(const std::string& s, float width, float size, Face f);
+
 float drawWrapped(const std::string& s, Rectangle box, float size, Color c, Face f, bool doDraw, float lineGap) {
-    float y = box.y;
+    std::string key = s;
+    key += '\x1f'; key += std::to_string((int)(box.width * 4)); key += ':'; key += std::to_string((int)(size * 4));
+    key += ':'; key += (char)('0' + (int)f);
+    auto it = g_wrapCache.find(key);
+    if (it == g_wrapCache.end()) {
+        if (g_wrapCache.size() > 512) g_wrapCache.clear();
+        it = g_wrapCache.emplace(std::move(key), wrapLines(s, box.width, size, f)).first;
+    }
     const float lh = size * lineGap;
+    float y = box.y;
+    for (const std::string& line : it->second) {
+        if (doDraw && !line.empty()) draw(line, box.x, y, size, c, f);
+        y += lh;
+    }
+    return y - box.y;
+}
+
+// The old drawWrapped's breaking, unchanged, recording lines instead of drawing.
+static std::vector<std::string> wrapLines(const std::string& s, float width, float size, Face f) {
+    std::vector<std::string> lines;
+    const Rectangle box{0, 0, width, 0};
     size_t start = 0;
     while (start <= s.size()) {
         size_t nl = s.find('\n', start);
@@ -344,8 +389,7 @@ float drawWrapped(const std::string& s, Rectangle box, float size, Color c, Face
             std::string word = para.substr(i, sp == std::string::npos ? std::string::npos : sp - i + 1);
             std::string trial = line + word;
             if (!line.empty() && measure(trial, size, f).x > box.width) {
-                if (doDraw) draw(line, box.x, y, size, c, f);
-                y += lh;
+                lines.push_back(line);
                 line = word;
             } else if (line.empty() && measure(word, size, f).x > box.width) {
                 // One unbreakable run: split by codepoint.
@@ -356,8 +400,7 @@ float drawWrapped(const std::string& s, Rectangle box, float size, Color c, Face
                     if (b <= 0) b = 1;
                     std::string next = chunk + word.substr(k, (size_t)b);
                     if (!chunk.empty() && measure(next, size, f).x > box.width) {
-                        if (doDraw) draw(chunk, box.x, y, size, c, f);
-                        y += lh;
+                        lines.push_back(chunk);
                         chunk = word.substr(k, (size_t)b);
                     } else {
                         chunk = next;
@@ -371,12 +414,11 @@ float drawWrapped(const std::string& s, Rectangle box, float size, Color c, Face
             if (sp == std::string::npos) break;
             i = sp + 1;
         }
-        if (doDraw && !line.empty()) draw(line, box.x, y, size, c, f);
-        y += lh;
+        lines.push_back(line);
         if (nl == std::string::npos) break;
         start = nl + 1;
     }
-    return y - box.y;
+    return lines;
 }
 
 std::string ellipsize(const std::string& s, float width, float size, Face f) {

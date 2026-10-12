@@ -84,7 +84,10 @@ void setLanguage(const std::string& requested) {
 std::vector<const std::string*> allStrings() {
     std::vector<const std::string*> out;
     for (auto& [k, v] : g_table) out.push_back(&v);
-    for (auto& l : kLangs) out.push_back(&l.name);
+    // Only this language's own name: the picker's other names (CJK, Arabic...)
+    // reach the atlas through utext's missing-glyph path when it is opened, so
+    // a 23 MB system fallback font is not read at every start.
+    out.push_back(&currentInfo().name);
     return out;
 }
 }  // namespace ustr

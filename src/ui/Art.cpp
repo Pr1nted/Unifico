@@ -117,12 +117,24 @@ void ship(float x, float y, float s, Color c) {
 }
 }  // namespace
 
+// Heroes are decoded when first shown and dropped once faded out: five
+// resident 1400x788 pictures, mipmapped and shadowed by the GL driver, were
+// ~12 MB each for a page that shows one.
+static Texture2D& heroTex(int i) {
+    if (!g_heroes[(size_t)i].id) {
+        char path[32];
+        snprintf(path, sizeof path, "art/hero-%d.jpg", i);
+        g_heroes[(size_t)i] = load(path);
+    }
+    return g_heroes[(size_t)i];
+}
+
 void init() {
     for (int i = 0;; ++i) {
         char path[32];
         snprintf(path, sizeof path, "art/hero-%d.jpg", i);
         if (!uassets::get(path)) break;
-        g_heroes.push_back(load(path));
+        g_heroes.push_back(Texture2D{});
     }
     g_logo = load("art/logo.png");
     g_odLogo = load("art/od-logo.png");
@@ -133,7 +145,7 @@ void init() {
 }
 
 void shutdown() {
-    for (auto& t : g_heroes) UnloadTexture(t);
+    for (auto& t : g_heroes) if (t.id) UnloadTexture(t);
     for (Texture2D* t : {&g_logo, &g_odLogo, &g_icon, &g_ach, &g_temple, &g_library}) if (t->id) UnloadTexture(*t);
     if (g_contours.id) UnloadRenderTexture(g_contours);
 }
@@ -165,8 +177,10 @@ void hero(Rectangle r, int which, float t) {
         if (which != g_lastHero) { g_fromHero = g_lastHero; g_lastHero = which; g_fade = 0; }
         g_fade = std::min(1.0f, g_fade + GetFrameTime() * 0.8f);
         ui::scissor((int)r.x, (int)r.y, (int)r.width, (int)r.height);
-        if (g_fade < 1.0f) drawPan(g_heroes[g_fromHero], r, t, 1.0f);
-        drawPan(g_heroes[which], r, t, g_fade);
+        if (g_fade < 1.0f) drawPan(heroTex(g_fromHero), r, t, 1.0f);
+        else for (int k = 0; k < (int)g_heroes.size(); ++k)
+            if (k != which && g_heroes[(size_t)k].id) { UnloadTexture(g_heroes[(size_t)k]); g_heroes[(size_t)k] = Texture2D{}; }
+        drawPan(heroTex(which), r, t, g_fade);
         // Weather and traffic over the picture.
         for (int k = 0; k < 3; ++k) {
             float speed = 9.0f + k * 4.0f;
