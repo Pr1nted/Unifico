@@ -75,7 +75,7 @@ set(SUPPORT_GIF_RECORDING OFF CACHE BOOL "" FORCE)
 set(SUPPORT_TRACELOG ON CACHE BOOL "" FORCE)
 FetchContent_Declare(raylib
     GIT_REPOSITORY https://github.com/raysan5/raylib.git
-    GIT_TAG 5.5
+    GIT_TAG 6.2
     GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(raylib)
 
