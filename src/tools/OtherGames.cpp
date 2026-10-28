@@ -76,8 +76,9 @@ Verdict support(Game g) {
     if (g == Game::Unciv) {
         // Unciv's desktop jar carries LWJGL natives for Windows, macOS and
         // Linux on x64/arm64 only; the Windows and Linux x64 zips bundle Java.
-        if (t == "freebsd-x64" || t == "openbsd-x64" || t == "linux-armv7" || t == "linux-riscv64" || t == "linux-x86" ||
-            t == "windows-x86") {
+        const std::string os = upaths::osName();
+        if (os == "freebsd" || os == "openbsd" || os == "netbsd" || t == "linux-armv7" || t == "linux-riscv64" ||
+            t == "linux-x86" || t == "windows-x86") {
             v.ok = false;
             v.why = N_("Unciv has no desktop build for %s.");
             v.a1 = usupport::host();

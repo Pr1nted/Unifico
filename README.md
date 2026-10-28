@@ -6,8 +6,17 @@ you in once, and keeps track of your worlds, mods, servers and achievements.
 
 ![Unifico](docs/screenshots/overview.png)
 
-It is a single C++ program of about 3.5 MB, built on raylib, for macOS,
-Windows, Linux, FreeBSD and OpenBSD.
+It is a single C++ program of about 3.5 MB, built on raylib, for every
+system Open Doctrines ships on:
+
+| System | Builds |
+|---|---|
+| macOS | arm64, x64 |
+| Windows | x64, x86, arm64 |
+| Linux | x64, arm64, x86, armv7, riscv64 |
+| FreeBSD 14 | x64, arm64 |
+| OpenBSD 7.7 | x64, arm64 |
+| NetBSD 10 | x64, arm64 |
 
 ## What it does
 
@@ -91,7 +100,12 @@ What each platform needs:
 
 - **Linux:** libcurl and X11/Wayland dev headers. raylib and open-dragoman are
   fetched at configure time.
-- **macOS and the BSDs:** the system libcurl.
+- **macOS and the BSDs:** the system libcurl (on the BSDs, the `curl`
+  package). On NetBSD, add `-DCMAKE_PREFIX_PATH=/usr/X11R7` so CMake finds
+  the base system's OpenGL headers.
+- **Other Linux architectures:** cross-compile with a toolchain file from
+  `tools/cmake/` (`linux-i686`, `linux-armv7`, `linux-riscv64`);
+  `tools/ci_cross_deps.sh` installs what each needs on Ubuntu.
 - **Windows:** nothing extra; HTTPS goes through WinHTTP.
 
 ## Translations
