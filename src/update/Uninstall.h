@@ -5,6 +5,7 @@
 // What is NOT touched: installations the launcher adopted rather than made
 // (it never deletes what it did not install), and anything the person chose to
 // keep (worlds can be exported to a folder first).
+#include <cstdint>
 #include <string>
 #include <vector>
 

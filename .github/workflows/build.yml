@@ -1,6 +1,13 @@
 # Every platform Open Doctrines ships on, on every push. TempleOS is the one
 # exception, and not by omission: Unifico RUNS the TempleOS edition (in QEMU)
-# rather than running ON TempleOS.
+# rather than running ON TempleOS. The web and Android builds are the other
+# two: a browser and a phone have no use for a launcher.
+#
+# THE SAME LIST AS THE GAME'S. Each tag below is a zip the game's release
+# workflows publish (release-game.yml and bsd-game.yml in Open Doctrines), so
+# the launcher runs wherever the game does. Every build also runs UnificoTest,
+# told which tag it is released under -- a launcher that names its own platform
+# differently asks its self-updater for a zip that is never published.
 name: build
 
 on:
@@ -28,6 +35,7 @@ jobs:
         run: tools/check_catalog.sh "$GITHUB_WORKSPACE/.open-doctrines"
 
   desktop:
+    name: ${{ matrix.tag }}
     strategy:
       fail-fast: false
       matrix:
@@ -35,18 +43,31 @@ jobs:
           - { os: macos-14,         tag: macos-arm64,   cmake: "-DCMAKE_OSX_ARCHITECTURES=arm64" }
           - { os: macos-14,         tag: macos-x64,     cmake: "-DCMAKE_OSX_ARCHITECTURES=x86_64" }
           - { os: windows-latest,   tag: windows-x64,   cmake: "-A x64" }
+          # 32-bit Windows: the x64 runner's MSVC with the Win32 platform. It
+          # runs there natively (WoW64), so the tests below run it too.
+          - { os: windows-latest,   tag: windows-x86,   cmake: "-A Win32" }
           - { os: windows-11-arm,   tag: windows-arm64, cmake: "-A ARM64" }
           - { os: ubuntu-22.04,     tag: linux-x64,     cmake: "" }
           - { os: ubuntu-22.04-arm, tag: linux-arm64,   cmake: "" }
+          # 32-bit x86, 32-bit Arm and RISC-V Linux: CROSS-compiled on an x86-64
+          # runner against Ubuntu's multiarch libraries, as the game is, and
+          # tested under QEMU user mode (tools/ci_cross_deps.sh registers it).
+          # riscv64 on 24.04 for the reason that script gives.
+          - { os: ubuntu-22.04, tag: linux-x86,     deb_arch: i386,    triplet: i686-linux-gnu,      cmake: "-DCMAKE_TOOLCHAIN_FILE=tools/cmake/linux-i686.cmake" }
+          - { os: ubuntu-22.04, tag: linux-armv7,   deb_arch: armhf,   triplet: arm-linux-gnueabihf, cmake: "-DCMAKE_TOOLCHAIN_FILE=tools/cmake/linux-armv7.cmake" }
+          - { os: ubuntu-24.04, tag: linux-riscv64, deb_arch: riscv64, triplet: riscv64-linux-gnu,   cmake: "-DCMAKE_TOOLCHAIN_FILE=tools/cmake/linux-riscv64.cmake" }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - name: Linux packages
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && !matrix.deb_arch
         run: |
           sudo apt-get update
           sudo apt-get install -y libcurl4-openssl-dev libx11-dev libxrandr-dev libxinerama-dev \
             libxcursor-dev libxi-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev
+      - name: Cross toolchain (${{ matrix.deb_arch }})
+        if: matrix.deb_arch
+        run: bash tools/ci_cross_deps.sh "${{ matrix.deb_arch }}" "${{ matrix.triplet }}"
       - name: Configure
         shell: bash
         run: >
@@ -59,7 +80,7 @@ jobs:
         run: |
           cmake --build build --config Release --target UnificoTest -j 4
           t=build/UnificoTest; [ -f build/Release/UnificoTest.exe ] && t=build/Release/UnificoTest.exe
-          "$t" .
+          "$t" . "${{ matrix.tag }}"
       - name: Strings are extracted
         run: python3 tools/extract_strings.py --check
       - name: Package
@@ -78,21 +99,40 @@ jobs:
           name: Unifico-${{ matrix.tag }}
           path: dist/*.zip
 
+  # FreeBSD, OpenBSD and NetBSD, on x86-64 and 64-bit Arm, each built by the
+  # system's own compiler inside a real VM (vmactions) on a Linux runner. The
+  # Arm guests are EMULATED -- an x86 runner has no Arm virtualisation, and an
+  # Arm runner has no nested virtualisation at all, which vmactions measured as
+  # slower still -- hence the longer timeout.
+  #
+  # The releases are the game's (Open Doctrines' bsd-game.yml), so the launcher
+  # runs on exactly the systems the game it installs does. The build, the tests
+  # and the packaging are tools/ci_bsd.sh, one script for all six; the steps
+  # here only boot the VM and install packages.
   bsd:
+    name: ${{ matrix.tag }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { bsd: freebsd, tag: freebsd-x64 }
-          - { bsd: openbsd, tag: openbsd-x64 }
-    runs-on: ubuntu-22.04
+          - { bsd: freebsd, arch: x86_64,  machine: x86_64,  tag: freebsd-x64 }
+          - { bsd: freebsd, arch: aarch64, machine: aarch64, tag: freebsd-arm64 }
+          - { bsd: openbsd, arch: x86_64,  machine: x86_64,  tag: openbsd-x64 }
+          - { bsd: openbsd, arch: aarch64, machine: aarch64, tag: openbsd-arm64 }
+          - { bsd: netbsd,  arch: x86_64,  machine: x86_64,  tag: netbsd-x64 }
+          - { bsd: netbsd,  arch: aarch64, machine: aarch64, tag: netbsd-arm64 }
     steps:
       - uses: actions/checkout@v4
-      - name: Build in a real ${{ matrix.bsd }} VM
+      - name: Build in a real FreeBSD VM (${{ matrix.arch }})
         if: matrix.bsd == 'freebsd'
         uses: vmactions/freebsd-vm@v1
         with:
+          release: '14.2'
+          arch: ${{ matrix.arch }}
           usesh: true
+          copyback: true
           # GL/gl.h comes from libglvnd and xorgproto, and neither was here:
           # raylib's find_package(OpenGL) then set OPENGL_INCLUDE_DIR to
           # NOTFOUND and the GENERATE step failed, which reads as a raylib
@@ -104,19 +144,21 @@ jobs:
                            libglvnd mesa-libs xorgproto \
                            libX11 libXext libXrandr libXi libXcursor \
                            libXinerama libxkbcommon wayland
-            for t in cmake git; do
+            for t in cmake git python3 zip; do
               command -v $t >/dev/null || { echo "prepare failed: no $t"; exit 1; }
             done
-          run: |
-            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "-DOD_ACHIEVEMENT_KEYS=${{ vars.OD_ACHIEVEMENT_KEYS }}"
-            cmake --build build -j 4
-            mkdir -p dist pkg && cp build/Unifico packaging/linux/unifico.desktop packaging/linux/unifico.png pkg/
-            cd pkg && zip -q ../dist/Unifico-${{ matrix.tag }}.zip *
-      - name: Build in a real ${{ matrix.bsd }} VM
+          run: OD_ACHIEVEMENT_KEYS="${{ vars.OD_ACHIEVEMENT_KEYS }}" sh tools/ci_bsd.sh ${{ matrix.tag }} ${{ matrix.machine }}
+      - name: Build in a real OpenBSD VM (${{ matrix.arch }})
         if: matrix.bsd == 'openbsd'
         uses: vmactions/openbsd-vm@v1
         with:
+          # The game's release. OpenBSD keeps package sets for the two newest
+          # releases only; when this one ages out, prepare fails with "no such
+          # dir" on the package mirror. Move it with bsd-game.yml's.
+          release: '7.7'
+          arch: ${{ matrix.arch }}
           usesh: true
+          copyback: true
           # NOT `pkg_add python3`: OpenBSD has no package by that name, so
           # pkg_add answers "Can't find python3", carries on having installed
           # the rest, and the prepare looks fine. The image ships a python3.NN
@@ -128,19 +170,47 @@ jobs:
           prepare: |
             set -e
             pkg_add -I cmake git curl zip
-            for t in cmake git; do
+            for t in cmake git zip; do
               command -v $t >/dev/null || { echo "prepare failed: no $t"; exit 1; }
             done
             if ! command -v python3 >/dev/null; then
               py=$(ls /usr/local/bin/python3.[0-9]* 2>/dev/null | grep -E 'python3\.[0-9]+$' | sort -V | tail -1)
-              [ -n "$py" ] && ln -sf "$py" /usr/local/bin/python3
+              [ -n "$py" ] || { echo "prepare failed: no python3 anywhere"; exit 1; }
+              ln -sf "$py" /usr/local/bin/python3
             fi
+          run: OD_ACHIEVEMENT_KEYS="${{ vars.OD_ACHIEVEMENT_KEYS }}" sh tools/ci_bsd.sh ${{ matrix.tag }} ${{ matrix.machine }}
+      - name: Build in a real NetBSD VM (${{ matrix.arch }})
+        if: matrix.bsd == 'netbsd'
+        uses: vmactions/netbsd-vm@v1
+        with:
+          # 10.1, the game's release. NetBSD runs a binary built on an older
+          # release on a newer one, so building on 10 reaches 10 and 11 both.
+          release: '10.1'
+          arch: ${{ matrix.arch }}
+          copyback: true
+          # pkgsrc, under /usr/pkg. Python is versioned there (python312 gives
+          # python3.12 and nothing called python3), so the unversioned name is
+          # made here, as OpenBSD's is above. X and Mesa are in base, under
+          # /usr/X11R7 -- a prefix FindX11 knows and FindOpenGL does not, hence
+          # the CMAKE_PREFIX_PATH below.
+          prepare: |
+            set -e
+            export PATH="/usr/pkg/sbin:/usr/pkg/bin:$PATH"
+            if command -v pkgin >/dev/null; then
+              pkgin -y install cmake git-base python312 curl zip
+            else
+              /usr/sbin/pkg_add -I cmake git-base python312 curl zip
+            fi
+            ln -sf /usr/pkg/bin/python3.12 /usr/pkg/bin/python3
+            for t in cmake git python3 zip; do
+              command -v $t >/dev/null || { echo "prepare failed: no $t"; exit 1; }
+            done
+            test -f /usr/X11R7/include/GL/gl.h || { echo "prepare failed: no X11/Mesa sets in this image"; exit 1; }
           run: |
-            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "-DOD_ACHIEVEMENT_KEYS=${{ vars.OD_ACHIEVEMENT_KEYS }}"
-            cmake --build build -j 4
-            mkdir -p dist pkg && cp build/Unifico packaging/linux/unifico.desktop packaging/linux/unifico.png pkg/
-            cd pkg && zip -q ../dist/Unifico-${{ matrix.tag }}.zip *
+            export PATH="/usr/pkg/sbin:/usr/pkg/bin:$PATH"
+            OD_ACHIEVEMENT_KEYS="${{ vars.OD_ACHIEVEMENT_KEYS }}" sh tools/ci_bsd.sh ${{ matrix.tag }} ${{ matrix.machine }} -DCMAKE_PREFIX_PATH=/usr/X11R7
       - uses: actions/upload-artifact@v4
         with:
           name: Unifico-${{ matrix.tag }}
           path: dist/*.zip
+          if-no-files-found: error

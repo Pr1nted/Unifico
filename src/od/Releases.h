@@ -28,6 +28,8 @@ struct Release {
 namespace ureleases {
 /** The zip this machine runs, by the game's own naming (GameUpdates::assetName). */
 std::string gameAssetName();
+/** The same, for a platform tag ("netbsd-arm64"). Exposed for the tests. */
+std::string gameAssetName(const std::string& platformTag);
 /** Parse GitHub's /releases JSON. Exposed for the tests. */
 std::vector<Release> parse(const std::string& json, const std::string& tagPrefix);
 /** Cached list, newest first (game releases only: tags "v..."). */
