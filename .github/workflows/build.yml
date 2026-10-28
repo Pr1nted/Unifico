@@ -254,7 +254,9 @@ jobs:
           # compiler, X11 or Mesa, so all of it comes from IPS. Each package is
           # installed on its own and a miss is printed rather than fatal:
           # `pkg install` refuses a whole list over one unknown name, and the
-          # checks after it say what actually matters. Exit 4 is "nothing to do".
+          # checks after it say what actually matters. Exit 4 is "nothing to do",
+          # caught with `|| rc=$?`: vmactions runs prepare with errexit, so a
+          # bare `pkg install` answering 4 ended the step there, silently.
           release: '202604'
           copyback: true
           prepare: |
@@ -263,7 +265,7 @@ jobs:
                      x11/library/mesa x11/library/libx11 x11/library/libxext \
                      x11/library/libxrandr x11/library/libxinerama x11/library/libxcursor \
                      x11/library/libxi x11/header/x11-protocols library/libxkbcommon; do
-              pkg install -q "$p"; rc=$?
+              rc=0; pkg install -q "$p" || rc=$?
               [ $rc = 0 ] || [ $rc = 4 ] || echo "pkg: $p not installed (exit $rc)"
             done
             for t in cmake git gcc g++ python3 zip; do
