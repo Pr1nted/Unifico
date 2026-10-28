@@ -191,7 +191,7 @@ void hero(Rectangle r, int which, float t) {
         // above the table were swinging very slightly.
         {
             const float cx = r.x + fmodf(t * 18.0f, r.width + 800) - 400;
-            DrawCircleGradient((int)cx, (int)(r.y + r.height * 0.45f), r.height * 0.9f, Color{232, 228, 218, 12}, BLANK);
+            DrawCircleGradient(Vector2{cx, r.y + r.height * 0.45f}, r.height * 0.9f, Color{232, 228, 218, 12}, BLANK);
         }
         vignette(r, 0.85f);
         ui::endScissor();
@@ -204,7 +204,7 @@ void backdrop(Rectangle r, float t) {
     const float ox = 200 + 180 * sinf(t * 0.013f), oy = 150 + 130 * cosf(t * 0.011f);
     DrawTextureRec(g_contours.texture, {ox, oy, r.width, -r.height}, {r.x, r.y}, WHITE);
     // A lamp above the table: warm in the middle, falling off at the edges.
-    DrawCircleGradient((int)(r.x + r.width * 0.55f), (int)(r.y + r.height * 0.35f), r.width * 0.6f,
+    DrawCircleGradient(Vector2{r.x + r.width * 0.55f, r.y + r.height * 0.35f}, r.width * 0.6f,
                        theme::accentA((unsigned char)(10 + 3 * sinf(t * 1.7f))), BLANK);
 }
 
