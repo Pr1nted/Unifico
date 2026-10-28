@@ -80,14 +80,16 @@ std::vector<int> baseSet() {
 // Which codepoints a TrueType file actually maps, via raylib's stb_truetype.
 std::unordered_set<int> coverage(const std::string& ttf, const std::vector<int>& cps) {
     std::unordered_set<int> out;
-    const int count = (int)cps.size();
+    // raylib 6 returns only the glyphs the face HAS, packed, and says how many
+    // in `got` (5.5 gave every requested codepoint an entry, missing ones empty).
+    // Walking the requested count over the packed array would read past its
+    // end, so it walks what came back, and asks each entry for its own value.
+    int got = 0;
     GlyphInfo* g = LoadFontData((const unsigned char*)ttf.data(), (int)ttf.size(), 8,
-                                const_cast<int*>(cps.data()), count, FONT_DEFAULT);
-    // LoadFontData gives every requested codepoint an entry; a missing glyph
-    // has an empty image and no advance. That is the test for "this face has it".
-    for (int i = 0; g && i < count; ++i)
-        if (g[i].advanceX > 0 || g[i].image.width > 0 || cps[i] == 0x20) out.insert(g[i].value);
-    if (g) UnloadFontData(g, count);
+                                cps.data(), (int)cps.size(), FONT_DEFAULT, &got);
+    for (int i = 0; g && i < got; ++i)
+        if (g[i].advanceX > 0 || g[i].image.width > 0 || g[i].value == 0x20) out.insert(g[i].value);
+    if (g) UnloadFontData(g, got);
     return out;
 }
 
