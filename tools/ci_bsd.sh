@@ -20,7 +20,9 @@ shift 2
 
 uname -a
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "-DOD_ACHIEVEMENT_KEYS=${OD_ACHIEVEMENT_KEYS:-}" "$@"
-cmake --build build -j "$(getconf NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu)"
+# getconf on Linux-likes, sysctl on the BSDs, psrinfo on illumos.
+jobs=$(getconf NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || psrinfo | wc -l)
+cmake --build build -j $jobs
 cmake --build build --target UnificoTest -j 2
 # With the tag: the launcher must call this platform what it is released as,
 # or its self-updater asks for a zip that is never published.

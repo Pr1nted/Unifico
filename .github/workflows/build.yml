@@ -99,7 +99,8 @@ jobs:
           name: Unifico-${{ matrix.tag }}
           path: dist/*.zip
 
-  # FreeBSD, OpenBSD and NetBSD, on x86-64 and 64-bit Arm, each built by the
+  # FreeBSD, OpenBSD and NetBSD, on x86-64 and 64-bit Arm, and OpenIndiana
+  # (illumos) on x86-64, each built by the
   # system's own compiler inside a real VM (vmactions) on a Linux runner. The
   # Arm guests are EMULATED -- an x86 runner has no Arm virtualisation, and an
   # Arm runner has no nested virtualisation at all, which vmactions measured as
@@ -107,7 +108,7 @@ jobs:
   #
   # The releases are the game's (Open Doctrines' bsd-game.yml), so the launcher
   # runs on exactly the systems the game it installs does. The build, the tests
-  # and the packaging are tools/ci_bsd.sh, one script for all six; the steps
+  # and the packaging are tools/ci_bsd.sh, one script for all seven; the steps
   # here only boot the VM and install packages.
   bsd:
     name: ${{ matrix.tag }}
@@ -126,6 +127,9 @@ jobs:
           - { bsd: openbsd, arch: aarch64, machine: aarch64, tag: openbsd-arm64 }
           - { bsd: netbsd,  arch: x86_64,  machine: x86_64,  tag: netbsd-x64 }
           - { bsd: netbsd,  arch: aarch64, machine: aarch64, tag: netbsd-arm64 }
+          # OpenIndiana (illumos): x86-64 only, as the game is -- no illumos
+          # distribution ships for Arm.
+          - { bsd: illumos, arch: x86_64,  machine: x86_64,  tag: illumos-x64 }
     steps:
       - uses: actions/checkout@v4
       - name: Build in a real FreeBSD VM (${{ matrix.arch }})
@@ -242,6 +246,31 @@ jobs:
           run: |
             export PATH="/usr/pkg/sbin:/usr/pkg/bin:$PATH"
             OD_ACHIEVEMENT_KEYS="${{ vars.OD_ACHIEVEMENT_KEYS }}" sh tools/ci_bsd.sh ${{ matrix.tag }} ${{ matrix.machine }} -DCMAKE_PREFIX_PATH=/usr/X11R7
+      - name: Build in a real OpenIndiana VM (${{ matrix.arch }})
+        if: matrix.bsd == 'illumos'
+        uses: vmactions/openindiana-vm@v1
+        with:
+          # The game's release (bsd-game.yml there). The text image has no
+          # compiler, X11 or Mesa, so all of it comes from IPS. Each package is
+          # installed on its own and a miss is printed rather than fatal:
+          # `pkg install` refuses a whole list over one unknown name, and the
+          # checks after it say what actually matters. Exit 4 is "nothing to do".
+          release: '202604'
+          copyback: true
+          prepare: |
+            for p in build-essential developer/build/cmake developer/versioning/git \
+                     runtime/python-313 web/curl compress/zip \
+                     x11/library/mesa x11/library/libx11 x11/library/libxext \
+                     x11/library/libxrandr x11/library/libxinerama x11/library/libxcursor \
+                     x11/library/libxi x11/header/x11-protocols library/libxkbcommon; do
+              pkg install -q "$p"; rc=$?
+              [ $rc = 0 ] || [ $rc = 4 ] || echo "pkg: $p not installed (exit $rc)"
+            done
+            for t in cmake git gcc g++ python3 zip; do
+              command -v $t >/dev/null || { echo "prepare failed: no $t"; exit 1; }
+            done
+            ls /usr/include/GL/gl.h /usr/include/X11/Xlib.h || { echo "prepare failed: no GL/X11 headers"; exit 1; }
+          run: OD_ACHIEVEMENT_KEYS="${{ vars.OD_ACHIEVEMENT_KEYS }}" CC=gcc CXX=g++ sh tools/ci_bsd.sh ${{ matrix.tag }} ${{ matrix.machine }}
       - uses: actions/upload-artifact@v4
         with:
           name: Unifico-${{ matrix.tag }}

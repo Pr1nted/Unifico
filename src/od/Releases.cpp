@@ -22,10 +22,11 @@ std::string cachePath() { return upaths::cacheDir() + "/releases.json"; }
 std::string gameAssetName(const std::string& tag) {
     // The same names the game's updater asks for (src/GameUpdates.cpp), so a
     // build the launcher installs is the build the game would have fetched.
-    // The game's BSD builds spell x86-64 the way the BSDs do, "amd64"; every
-    // other name, Arm on the BSDs included, is the launcher's own tag.
+    // The game's BSD and illumos builds spell x86-64 the way those systems do,
+    // "amd64"; every other name, Arm on the BSDs included, is the launcher's
+    // own tag.
     const std::string os = tag.substr(0, tag.find('-'));
-    const bool bsd = os == "freebsd" || os == "openbsd" || os == "netbsd";
+    const bool bsd = os == "freebsd" || os == "openbsd" || os == "netbsd" || os == "illumos";
     if (bsd && tag == os + "-x64") return "OpenDoctrines-" + os + "-amd64.zip";
     return "OpenDoctrines-" + tag + ".zip";
 }

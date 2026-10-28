@@ -98,6 +98,12 @@ std::string selfExe() {
     size_t len = sizeof buf;
     if (sysctl(mib, 4, buf, &len, nullptr, 0) == 0) return buf;
     return {};
+#elif defined(__sun)
+    // illumos: /proc/self/path/a.out is the link /proc/self/exe is elsewhere.
+    char buf[PATH_MAX];
+    ssize_t n = readlink("/proc/self/path/a.out", buf, sizeof buf - 1);
+    if (n > 0) { buf[n] = 0; return buf; }
+    return {};
 #else
     char buf[PATH_MAX];
     ssize_t n = readlink("/proc/self/exe", buf, sizeof buf - 1);
@@ -129,6 +135,8 @@ std::string osName() {
     return "openbsd";
 #elif defined(__NetBSD__)
     return "netbsd";
+#elif defined(__sun)
+    return "illumos";
 #else
     return "linux";
 #endif
