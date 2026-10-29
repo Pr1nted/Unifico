@@ -267,6 +267,10 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "MinSizeRel"
         target_compile_options(Unifico PRIVATE -Os -ffunction-sections -fdata-sections)
         if(APPLE)
             target_link_options(Unifico PRIVATE -Wl,-dead_strip)
+        elseif(CMAKE_SYSTEM_NAME STREQUAL "SunOS")
+            # illumos's own link-editor, not GNU ld: its name for dropping
+            # unreferenced sections is -z ignore.
+            target_link_options(Unifico PRIVATE -Wl,-z,ignore -s)
         else()
             target_link_options(Unifico PRIVATE -Wl,--gc-sections -s)
         endif()
