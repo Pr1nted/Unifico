@@ -22,8 +22,12 @@ project(Unifico VERSION ${UNIFICO_VERSION} LANGUAGES C CXX)
 # declarations illumos keeps behind __EXTENSIONS__ (clock_gettime there), and
 # C treats the call as implicit, which raylib builds as an error. The usual
 # illumos answer; pkgsrc and OmniOS build ports the same way.
+#
+# And the BSD socket calls (the TempleOS tool's serial-over-TCP) live in
+# libsocket and libnsl there, not libc: every target links them, the tests too.
 if(CMAKE_SYSTEM_NAME STREQUAL "SunOS")
     add_compile_definitions(__EXTENSIONS__)
+    link_libraries(socket nsl)
 endif()
 
 set(CMAKE_CXX_STANDARD 17)
