@@ -46,6 +46,7 @@ int main(int argc, char** argv) {
     ok(ureleases::gameAssetName("openbsd-x64") == "OpenDoctrines-openbsd-amd64.zip", "openbsd x64 is amd64");
     ok(ureleases::gameAssetName("netbsd-x64") == "OpenDoctrines-netbsd-amd64.zip", "netbsd x64 is amd64");
     ok(ureleases::gameAssetName("netbsd-arm64") == "OpenDoctrines-netbsd-arm64.zip", "bsd arm64 keeps its name");
+    ok(ureleases::gameAssetName("illumos-x64") == "OpenDoctrines-illumos-amd64.zip", "illumos x64 is amd64");
     // Every machine CI builds on is one the launcher can name. "unknown" here
     // would mean this build installs nothing and can never update itself.
     ok(upaths::platformTag().find("unknown") == std::string::npos, "this machine has a platform tag");

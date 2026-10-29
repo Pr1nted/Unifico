@@ -16,6 +16,20 @@ file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" UNIFICO_VERSION_RAW)
 string(STRIP "${UNIFICO_VERSION_RAW}" UNIFICO_VERSION)
 project(Unifico VERSION ${UNIFICO_VERSION} LANGUAGES C CXX)
 
+# ILLUMOS: the whole POSIX and extension API, for every target and every
+# dependency fetched below. Code that asks for a narrow standard -- GLFW's
+# posix_time.c sets _POSIX_C_SOURCE 199309L itself -- otherwise loses
+# declarations illumos keeps behind __EXTENSIONS__ (clock_gettime there), and
+# C treats the call as implicit, which raylib builds as an error. The usual
+# illumos answer; pkgsrc and OmniOS build ports the same way.
+#
+# And the BSD socket calls (the TempleOS tool's serial-over-TCP) live in
+# libsocket and libnsl there, not libc: every target links them, the tests too.
+if(CMAKE_SYSTEM_NAME STREQUAL "SunOS")
+    add_compile_definitions(__EXTENSIONS__)
+    link_libraries(socket nsl)
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
@@ -257,6 +271,10 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "MinSizeRel"
         target_compile_options(Unifico PRIVATE -Os -ffunction-sections -fdata-sections)
         if(APPLE)
             target_link_options(Unifico PRIVATE -Wl,-dead_strip)
+        elseif(CMAKE_SYSTEM_NAME STREQUAL "SunOS")
+            # illumos's own link-editor, not GNU ld: its name for dropping
+            # unreferenced sections is -z ignore.
+            target_link_options(Unifico PRIVATE -Wl,-z,ignore -s)
         else()
             target_link_options(Unifico PRIVATE -Wl,--gc-sections -s)
         endif()
