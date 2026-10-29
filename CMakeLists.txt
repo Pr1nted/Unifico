@@ -16,6 +16,16 @@ file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" UNIFICO_VERSION_RAW)
 string(STRIP "${UNIFICO_VERSION_RAW}" UNIFICO_VERSION)
 project(Unifico VERSION ${UNIFICO_VERSION} LANGUAGES C CXX)
 
+# ILLUMOS: the whole POSIX and extension API, for every target and every
+# dependency fetched below. Code that asks for a narrow standard -- GLFW's
+# posix_time.c sets _POSIX_C_SOURCE 199309L itself -- otherwise loses
+# declarations illumos keeps behind __EXTENSIONS__ (clock_gettime there), and
+# C treats the call as implicit, which raylib builds as an error. The usual
+# illumos answer; pkgsrc and OmniOS build ports the same way.
+if(CMAKE_SYSTEM_NAME STREQUAL "SunOS")
+    add_compile_definitions(__EXTENSIONS__)
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
