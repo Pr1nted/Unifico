@@ -17,6 +17,7 @@ system Open Doctrines ships on:
 | FreeBSD 14 | x64, arm64 |
 | OpenBSD 7.7 | x64, arm64 |
 | NetBSD 10 | x64, arm64 |
+| OpenIndiana (illumos) | x64 |
 
 ## What it does
 
@@ -102,7 +103,9 @@ What each platform needs:
   fetched at configure time.
 - **macOS and the BSDs:** the system libcurl (on the BSDs, the `curl`
   package). On NetBSD, add `-DCMAKE_PREFIX_PATH=/usr/X11R7` so CMake finds
-  the base system's OpenGL headers.
+  the base system's OpenGL headers. On OpenIndiana (illumos), libcurl is
+  `web/curl` and X11/Mesa come from IPS (`x11/library/mesa` and friends);
+  build with gcc (`CC=gcc CXX=g++`).
 - **Other Linux architectures:** cross-compile with a toolchain file from
   `tools/cmake/` (`linux-i686`, `linux-armv7`, `linux-riscv64`);
   `tools/ci_cross_deps.sh` installs what each needs on Ubuntu.

@@ -35,6 +35,6 @@ std::string selfInstallPath();
 
 /** This machine as release asset names spell it: "macos-arm64", "windows-x64", ... */
 std::string platformTag();
-/** "macos", "windows", "linux", "freebsd", "openbsd", "netbsd". */
+/** "macos", "windows", "linux", "freebsd", "openbsd", "netbsd", "illumos". */
 std::string osName();
 }  // namespace upaths

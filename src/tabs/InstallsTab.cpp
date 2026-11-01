@@ -3,6 +3,7 @@
 #include "App.h"
 #include "core/FileDialog.h"
 #include "core/Fs.h"
+#include "core/Process.h"
 #include "core/Paths.h"
 #include "core/Settings.h"
 #include "od/Analytics.h"
@@ -223,7 +224,18 @@ void drawInstalls(App& a, Rectangle r) {
         sub += std::string("  ·  ") + T(chanName[channelOf(rel.version)]);
         if (as) sub += "  ·  " + ufs::humanBytes(as->size);
         else sub += std::string("  ·  ") + T("no build for this computer");
+        // Builds the launcher does not install (DOS, the Wii, the Vita, the
+        // .debs, ...): named, so a person on one of those knows where to look.
+        const std::vector<std::string> manual = ureleases::manualBuilds(rel);
+        if (!manual.empty()) {
+            std::string list;
+            for (auto& m : manual) list += (list.empty() ? "" : ", ") + m;
+            sub += std::string("  ·  ") + T("also for") + " " + list;
+        }
         utext::draw(sub, x + 20, y + 34, 13, theme::faint);
+        if (!as && !manual.empty() &&
+            ui::button({x + w - (have ? 300 : 180), y + 12, 160, 36}, T("Download page"), ui::Style::Ghost))
+            uproc::openUrl(ureleases::releasePage(rel));
         if (have) utext::draw(T("Installed"), x + w - 120, y + 20, 15, theme::ok);
         else if (as && !a.installJob) {
             if (ui::button({x + w - 140, y + 12, 120, 36}, T("Install"), ui::Style::Secondary)) {

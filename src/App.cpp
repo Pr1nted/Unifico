@@ -65,8 +65,13 @@ void App::init(int argc, char** argv) {
     SetTraceLogLevel(LOG_WARNING);
     InitWindow(1220, 760, "Unifico");
     SetWindowMinSize(960, 600);
+    // Never larger than the screen (a Steam Deck's panel is 1280x800).
+    uwindow::fitToScreen();
     // Restored natively on macOS; elsewhere borderless, with Esc as the way out.
-    if (Settings::get().fullscreen) uwindow::toggleFullscreen();
+    // Under gamescope (Steam Deck Game Mode) always fullscreen, as the game
+    // is there -- drawn at the panel's size rather than scaled up -- but not
+    // saved: the same install on the Deck's desktop keeps the person's choice.
+    if (Settings::get().fullscreen || uwindow::underGamescope()) uwindow::toggleFullscreen();
     // For checking layouts at other sizes (e.g. with --screenshots): WxH.
     if (const char* ws = std::getenv("UNIFICO_WINDOW")) {
         int w = 0, h = 0;

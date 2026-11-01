@@ -1,5 +1,5 @@
 # Tag vX.Y.Z -> build everything, publish a GitHub release with one zip per
-# platform. The launcher's self-updater reads exactly these asset names
+# platform (and a .deb for ChromeOS and Raspberry Pi OS). The launcher's self-updater reads exactly these asset names
 # (src/update/SelfUpdate.cpp: Unifico-<platform>.zip), and GitHub's per-asset
 # SHA-256 digest is what it checks a download against.
 name: release
@@ -35,4 +35,4 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" --title "Unifico ${GITHUB_REF_NAME#v}" \
             --notes "Download the zip for your system, unpack it, and run Unifico. It keeps itself up to date from then on." \
-            artifacts/**/*.zip
+            artifacts/**/*.zip artifacts/**/*.deb

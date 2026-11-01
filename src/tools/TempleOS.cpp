@@ -272,6 +272,8 @@ std::string qemuHelp() {
     return "Install QEMU:  pkg_add qemu";
 #elif defined(__NetBSD__)
     return "Install QEMU:  pkgin install qemu";
+#elif defined(__sun)
+    return "Install QEMU:  pkg install qemu";
 #else
     return "Install QEMU from your package manager, e.g.  sudo apt install qemu-system-x86";
 #endif

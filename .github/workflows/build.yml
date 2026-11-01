@@ -1,4 +1,5 @@
-# Every platform Open Doctrines ships on, on every push. TempleOS is the one
+# Every platform Open Doctrines ships on where a launcher makes sense, on every
+# push (docs/platforms.md has the full list and the reasons for each). TempleOS is the one
 # exception, and not by omission: Unifico RUNS the TempleOS edition (in QEMU)
 # rather than running ON TempleOS. The web and Android builds are the other
 # two: a browser and a phone have no use for a launcher.
@@ -47,8 +48,17 @@ jobs:
           # runs there natively (WoW64), so the tests below run it too.
           - { os: windows-latest,   tag: windows-x86,   cmake: "-A Win32" }
           - { os: windows-11-arm,   tag: windows-arm64, cmake: "-A ARM64" }
-          - { os: ubuntu-22.04,     tag: linux-x64,     cmake: "" }
-          - { os: ubuntu-22.04-arm, tag: linux-arm64,   cmake: "" }
+          # deb: the same build again as a .deb for ChromeOS's Linux container
+          # (Debian 12), as the game's OpenDoctrines-chromeos-<arch>.deb is.
+          - { os: ubuntu-22.04,     tag: linux-x64,     cmake: "", deb: chromeos, deb_pkg_arch: amd64, deb_name: chromeos-x64 }
+          - { os: ubuntu-22.04-arm, tag: linux-arm64,   cmake: "", deb: chromeos, deb_pkg_arch: arm64, deb_name: chromeos-arm64 }
+          # Raspberry Pi OS: OpenGL ES 2.0 (-DUNIFICO_GLES=ON, the game's
+          # OD_GLES), so it installs the game's raspios build. arm64 natively
+          # on an Arm runner; armhf cross-compiled as linux-armv7 is. Each also
+          # as a .deb, checked in Debian bookworm + archive.raspberrypi.com.
+          - { os: ubuntu-22.04-arm, tag: raspios-arm64, cmake: "-DUNIFICO_GLES=ON", deb: raspios, deb_pkg_arch: arm64, deb_name: raspios-arm64 }
+          - { os: ubuntu-22.04, tag: raspios-armhf, deb_arch: armhf, triplet: arm-linux-gnueabihf, deb: raspios, deb_pkg_arch: armhf, deb_name: raspios-armhf,
+              cmake: "-DCMAKE_TOOLCHAIN_FILE=tools/cmake/linux-armv7.cmake -DUNIFICO_GLES=ON" }
           # 32-bit x86, 32-bit Arm and RISC-V Linux: CROSS-compiled on an x86-64
           # runner against Ubuntu's multiarch libraries, as the game is, and
           # tested under QEMU user mode (tools/ci_cross_deps.sh registers it).
@@ -94,12 +104,29 @@ jobs:
                      (cd pkg && zip -q "../dist/Unifico-${{ matrix.tag }}.zip" *) ;;
           esac
           ls -lh dist
+      # ChromeOS and Raspberry Pi OS install a .deb. Installed and checked in
+      # the Debian those systems are (tools/deb_check.sh), as the game's
+      # chromeos_check.sh and raspios_check.sh do.
+      - name: QEMU, for the armhf container
+        if: matrix.deb && matrix.deb_pkg_arch == 'armhf'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm
+      - name: Package (.deb for ${{ matrix.deb }})
+        if: matrix.deb
+        run: |
+          set -eu
+          tools/make_deb.sh build/Unifico "$(cat VERSION)" "${{ matrix.deb_pkg_arch }}" "dist/Unifico-${{ matrix.deb_name }}.deb"
+          tools/deb_check.sh "dist/Unifico-${{ matrix.deb_name }}.deb" "${{ matrix.deb }}" "${{ matrix.deb_pkg_arch }}"
       - uses: actions/upload-artifact@v4
         with:
           name: Unifico-${{ matrix.tag }}
-          path: dist/*.zip
+          path: |
+            dist/*.zip
+            dist/*.deb
 
-  # FreeBSD, OpenBSD and NetBSD, on x86-64 and 64-bit Arm, each built by the
+  # FreeBSD, OpenBSD and NetBSD, on x86-64 and 64-bit Arm, and OpenIndiana
+  # (illumos) on x86-64, each built by the
   # system's own compiler inside a real VM (vmactions) on a Linux runner. The
   # Arm guests are EMULATED -- an x86 runner has no Arm virtualisation, and an
   # Arm runner has no nested virtualisation at all, which vmactions measured as
@@ -107,7 +134,7 @@ jobs:
   #
   # The releases are the game's (Open Doctrines' bsd-game.yml), so the launcher
   # runs on exactly the systems the game it installs does. The build, the tests
-  # and the packaging are tools/ci_bsd.sh, one script for all six; the steps
+  # and the packaging are tools/ci_bsd.sh, one script for all seven; the steps
   # here only boot the VM and install packages.
   bsd:
     name: ${{ matrix.tag }}
@@ -126,6 +153,12 @@ jobs:
           - { bsd: openbsd, arch: aarch64, machine: aarch64, tag: openbsd-arm64 }
           - { bsd: netbsd,  arch: x86_64,  machine: x86_64,  tag: netbsd-x64 }
           - { bsd: netbsd,  arch: aarch64, machine: aarch64, tag: netbsd-arm64 }
+          # OpenIndiana (illumos): x86-64 only, as the game is -- no illumos
+          # distribution ships for Arm.
+          - { bsd: illumos, arch: x86_64,  machine: x86_64,  tag: illumos-x64 }
+          # Haiku, x86-64 only as the game is (32-bit Haiku is the gcc2
+          # hybrid). raylib on the system SDL3: GLFW has no Haiku backend.
+          - { bsd: haiku,   arch: x86_64,  machine: x86_64,  tag: haiku-x64 }
     steps:
       - uses: actions/checkout@v4
       - name: Build in a real FreeBSD VM (${{ matrix.arch }})
@@ -242,8 +275,168 @@ jobs:
           run: |
             export PATH="/usr/pkg/sbin:/usr/pkg/bin:$PATH"
             OD_ACHIEVEMENT_KEYS="${{ vars.OD_ACHIEVEMENT_KEYS }}" sh tools/ci_bsd.sh ${{ matrix.tag }} ${{ matrix.machine }} -DCMAKE_PREFIX_PATH=/usr/X11R7
+      - name: Build in a real OpenIndiana VM (${{ matrix.arch }})
+        if: matrix.bsd == 'illumos'
+        uses: vmactions/openindiana-vm@v1
+        with:
+          # The game's release (bsd-game.yml there). The text image has no
+          # compiler, X11 or Mesa, so all of it comes from IPS. Each package is
+          # installed on its own and a miss is printed rather than fatal:
+          # `pkg install` refuses a whole list over one unknown name, and the
+          # checks after it say what actually matters. Exit 4 is "nothing to do",
+          # caught with `|| rc=$?`: vmactions runs prepare with errexit, so a
+          # bare `pkg install` answering 4 ended the step there, silently.
+          release: '202604'
+          copyback: true
+          prepare: |
+            for p in build-essential developer/build/cmake developer/versioning/git \
+                     runtime/python-313 web/curl compress/zip \
+                     x11/library/mesa x11/library/libx11 x11/library/libxext \
+                     x11/library/libxrandr x11/library/libxinerama x11/library/libxcursor \
+                     x11/library/libxi x11/header/x11-protocols library/libxkbcommon; do
+              rc=0; pkg install -q "$p" || rc=$?
+              [ $rc = 0 ] || [ $rc = 4 ] || echo "pkg: $p not installed (exit $rc)"
+            done
+            for t in cmake git gcc g++ python3 zip; do
+              command -v $t >/dev/null || { echo "prepare failed: no $t"; exit 1; }
+            done
+            ls /usr/include/GL/gl.h /usr/include/X11/Xlib.h || { echo "prepare failed: no GL/X11 headers"; exit 1; }
+          run: OD_ACHIEVEMENT_KEYS="${{ vars.OD_ACHIEVEMENT_KEYS }}" CC=gcc CXX=g++ sh tools/ci_bsd.sh ${{ matrix.tag }} ${{ matrix.machine }}
+      # The game's Haiku job (other-os-game.yml there): packages by what they
+      # provide, so a renamed HaikuPorts package still resolves; SDL3 by its
+      # package name, which "devel:libSDL3" did not resolve to on r1beta6.
+      # Unlike the game, no SDL3 from source: CMakeLists.txt requires the
+      # system one.
+      - name: Build in a real Haiku VM (${{ matrix.arch }})
+        if: matrix.bsd == 'haiku'
+        uses: vmactions/haiku-vm@v1
+        with:
+          release: 'r1beta6'
+          copyback: true
+          prepare: |
+            set -e
+            pkgman install -y cmd:cmake cmd:python3 cmd:git cmd:gcc cmd:zip devel:libcurl
+            pkgman install -y devel:libGL || pkgman install -y mesa_devel
+            pkgman install -y libsdl3_devel
+            for t in cmake python3 gcc g++ zip; do
+              command -v $t >/dev/null || { echo "prepare failed: no $t"; exit 1; }
+            done
+            gcc --version | head -1
+          run: OD_ACHIEVEMENT_KEYS="${{ vars.OD_ACHIEVEMENT_KEYS }}" sh tools/ci_bsd.sh ${{ matrix.tag }} ${{ matrix.machine }}
       - uses: actions/upload-artifact@v4
         with:
           name: Unifico-${{ matrix.tag }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+  # ── SERENITYOS ──
+  #
+  # The game's job (other-os-game.yml there), adapted: no VM image to boot, so
+  # SerenityOS's own cross toolchain and system are built from a pinned commit,
+  # then its SDL2 and curl ports, and the launcher is cross-compiled against
+  # that sysroot -- raylib on SDL2 with the software renderer (rlsw), on by
+  # default for SerenityOS in CMakeLists.txt, because its LibGL has no shaders.
+  #
+  # PINNED TO THE GAME'S COMMIT: the launcher runs on the SerenityOS the game
+  # is built for. Move the two together. The toolchain cache key is the game's
+  # too, but caches are per repository, so the first run here builds it.
+  #
+  # The tests are not run: they are SerenityOS programs and there is no
+  # SerenityOS to run them in. The binary is checked to be one instead.
+  serenity:
+    name: serenity-x64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 340
+    env:
+      SERENITY_COMMIT: b5d4da532a8c480da7e07d67c9263e4d35dbf0ed
+      TAG: serenity-x64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Room on the runner
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      - uses: actions/checkout@v4
+        with:
+          repository: SerenityOS/serenity
+          ref: ${{ env.SERENITY_COMMIT }}
+          path: serenity
+      - name: Host packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential cmake curl libmpfr-dev libmpc-dev libgmp-dev \
+            e2fsprogs ninja-build qemu-system-x86 qemu-utils ccache rsync unzip texinfo libssl-dev \
+            zlib1g-dev gcc-14 g++-14 fuse2fs zip
+      - name: Toolchain (cache)
+        id: tc
+        uses: actions/cache/restore@v4
+        with:
+          path: serenity/Toolchain/Local/x86_64
+          key: serenity-toolchain-x86_64-${{ env.SERENITY_COMMIT }}
+      - name: Build the toolchain
+        if: steps.tc.outputs.cache-hit != 'true'
+        run: serenity/Toolchain/BuildGNU.sh --ci
+        env: { ARCH: x86_64, CC: gcc-14, CXX: g++-14 }
+      - name: Save the toolchain
+        if: steps.tc.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: serenity/Toolchain/Local/x86_64
+          key: serenity-toolchain-x86_64-${{ env.SERENITY_COMMIT }}
+      - name: System, SDL2 and curl (cache)
+        id: sys
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            serenity/Build/x86_64/Root
+            serenity/Build/x86_64/CMakeToolchain.txt
+          key: serenity-root-sdl2-curl-x86_64-${{ env.SERENITY_COMMIT }}
+      - name: Build SerenityOS
+        if: steps.sys.outputs.cache-hit != 'true'
+        working-directory: serenity
+        run: |
+          cmake -S Meta/CMake/Superbuild -B Build/superbuild -GNinja \
+            -DSERENITY_ARCH=x86_64 -DSERENITY_TOOLCHAIN=GNU \
+            -DCMAKE_C_COMPILER=gcc-14 -DCMAKE_CXX_COMPILER=g++-14 \
+            -DENABLE_PCI_IDS_DOWNLOAD=OFF -DENABLE_USB_IDS_DOWNLOAD=OFF
+          cmake --build Build/superbuild
+          ninja -C Build/x86_64 install
+      - name: Build the SDL2 and curl ports
+        if: steps.sys.outputs.cache-hit != 'true'
+        run: |
+          (cd serenity/Ports/SDL2 && ./package.sh)
+          (cd serenity/Ports/curl && ./package.sh)
+      - name: Save the system and ports
+        if: steps.sys.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            serenity/Build/x86_64/Root
+            serenity/Build/x86_64/CMakeToolchain.txt
+          key: serenity-root-sdl2-curl-x86_64-${{ env.SERENITY_COMMIT }}
+      - name: Build the launcher for SerenityOS
+        run: |
+          export PATH="$PWD/serenity/Toolchain/Local/x86_64/bin:$PATH"
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$PWD/serenity/Build/x86_64/CMakeToolchain.txt" \
+            "-DOD_ACHIEVEMENT_KEYS=${{ vars.OD_ACHIEVEMENT_KEYS }}"
+          cmake --build build --target Unifico UnificoTest -j 4
+      - name: The binary is a SerenityOS x86-64 program
+        run: |
+          for b in build/Unifico build/UnificoTest; do
+            readelf -h "$b" | grep -q "Advanced Micro Devices X86-64" || { echo "$b: not x86-64"; exit 1; }
+            interp=$(readelf -l "$b" | sed -n 's/.*Requesting program interpreter: \(.*\)]/\1/p')
+            echo "$b: interpreter $interp"
+            [ "$interp" = "/usr/lib/Loader.so" ] || { echo "$b: not a SerenityOS program"; exit 1; }
+          done
+      - name: Package
+        run: |
+          mkdir -p dist pkg
+          cp build/Unifico packaging/linux/unifico.png pkg/
+          (cd pkg && zip -q "../dist/Unifico-$TAG.zip" *)
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Unifico-${{ env.TAG }}
           path: dist/*.zip
           if-no-files-found: error
