@@ -1,5 +1,6 @@
 // The launcher's logic without a window: versions, checksums, grants, worlds,
-// archives. Run with the repository root as the first argument.
+// archives. Run with the repository root as the first argument, and optionally
+// the platform tag this build is released under ("linux-armv7") as the second.
 #include "core/Fs.h"
 #include "core/Json.h"
 #include "core/Sha256.h"
@@ -37,6 +38,24 @@ int main(int argc, char** argv) {
         {"tag_name":"templeos-v1.2.2a","assets":[]},{"tag_name":"views-x","assets":[]},{"tag_name":"v1.10.0a","draft":true,"assets":[]}])", "v");
     ok(rels.size() == 1 && rels[0].version == "1.2.2a", "only game tags, no drafts");
     ok(rels[0].assets[0].sha256 == "ab", "digest read");
+    // The game zip each platform installs: the names the game's own release
+    // workflows publish (release-game.yml and bsd-game.yml in Open Doctrines).
+    ok(ureleases::gameAssetName("linux-riscv64") == "OpenDoctrines-linux-riscv64.zip", "linux asset name");
+    ok(ureleases::gameAssetName("windows-x86") == "OpenDoctrines-windows-x86.zip", "windows asset name");
+    ok(ureleases::gameAssetName("freebsd-x64") == "OpenDoctrines-freebsd-amd64.zip", "freebsd x64 is amd64");
+    ok(ureleases::gameAssetName("openbsd-x64") == "OpenDoctrines-openbsd-amd64.zip", "openbsd x64 is amd64");
+    ok(ureleases::gameAssetName("netbsd-x64") == "OpenDoctrines-netbsd-amd64.zip", "netbsd x64 is amd64");
+    ok(ureleases::gameAssetName("netbsd-arm64") == "OpenDoctrines-netbsd-arm64.zip", "bsd arm64 keeps its name");
+    // Every machine CI builds on is one the launcher can name. "unknown" here
+    // would mean this build installs nothing and can never update itself.
+    ok(upaths::platformTag().find("unknown") == std::string::npos, "this machine has a platform tag");
+    // CI passes the tag it releases this build under. If the launcher calls its
+    // own platform anything else, its self-updater asks for a zip that is never
+    // published, and that copy can never update.
+    if (argc > 2) {
+        ok(upaths::platformTag() == argv[2], "platform tag matches the released name");
+        if (upaths::platformTag() != argv[2]) std::fprintf(stderr, "  this build says %s\n", upaths::platformTag().c_str());
+    }
     // sha256 (FIPS 180-2 vector)
     ok(usha::hexOf("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "sha256 abc");
     // grants, against the Node-made vectors the game's test uses too

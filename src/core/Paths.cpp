@@ -13,7 +13,7 @@
 #else
 #  include <climits>
 #  include <unistd.h>
-#  if defined(__FreeBSD__) || defined(__OpenBSD__)
+#  if defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
 #    include <sys/types.h>
 #    include <sys/sysctl.h>
 #  endif
@@ -91,6 +91,13 @@ std::string selfExe() {
     size_t len = sizeof buf;
     if (sysctl(mib, 4, buf, &len, nullptr, 0) == 0) return buf;
     return {};
+#elif defined(__NetBSD__)
+    // NetBSD's spelling of the same question; /proc is not mounted by default.
+    int mib[4] = {CTL_KERN, KERN_PROC_ARGS, -1, KERN_PROC_PATHNAME};
+    char buf[PATH_MAX];
+    size_t len = sizeof buf;
+    if (sysctl(mib, 4, buf, &len, nullptr, 0) == 0) return buf;
+    return {};
 #else
     char buf[PATH_MAX];
     ssize_t n = readlink("/proc/self/exe", buf, sizeof buf - 1);
@@ -120,6 +127,8 @@ std::string osName() {
     return "freebsd";
 #elif defined(__OpenBSD__)
     return "openbsd";
+#elif defined(__NetBSD__)
+    return "netbsd";
 #else
     return "linux";
 #endif
