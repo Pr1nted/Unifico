@@ -41,8 +41,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-14,         tag: macos-arm64,   cmake: "-DCMAKE_OSX_ARCHITECTURES=arm64" }
-          - { os: macos-14,         tag: macos-x64,     cmake: "-DCMAKE_OSX_ARCHITECTURES=x86_64" }
+          - { os: macos-15,         tag: macos-arm64,   cmake: "-DCMAKE_OSX_ARCHITECTURES=arm64" }
+          - { os: macos-15,         tag: macos-x64,     cmake: "-DCMAKE_OSX_ARCHITECTURES=x86_64" }
           - { os: windows-latest,   tag: windows-x64,   cmake: "-A x64" }
           # 32-bit Windows: the x64 runner's MSVC with the Win32 platform. It
           # runs there natively (WoW64), so the tests below run it too.
