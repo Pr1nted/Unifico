@@ -58,7 +58,17 @@ std::string assetName() {
 
 std::string stagingFor(const std::string& installPath) { return installPath + ".new"; }
 
+bool managed() {
+    std::error_code ec;
+    return fs::exists(fs::path(upaths::selfInstallPath()).parent_path() / "MANAGED", ec);
+}
+
 bool check(Available& out, std::string* error) {
+    // A .deb (ChromeOS, Raspberry Pi OS) is the package manager's to update:
+    // the launcher lives in /usr/lib/unifico, which it cannot write, and
+    // replacing it behind dpkg's back would leave dpkg describing a file that
+    // is no longer there. tools/make_deb.sh puts MANAGED beside it.
+    if (managed()) { if (error) *error = "installed by the package manager, which updates it"; return false; }
     uhttp::Request r;
     r.url = std::string("https://api.github.com/repos/") + UNIFICO_SELF_REPO + "/releases/latest";
     r.headers = {"Accept: application/vnd.github+json"};

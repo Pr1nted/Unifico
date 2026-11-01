@@ -47,6 +47,34 @@ int main(int argc, char** argv) {
     ok(ureleases::gameAssetName("netbsd-x64") == "OpenDoctrines-netbsd-amd64.zip", "netbsd x64 is amd64");
     ok(ureleases::gameAssetName("netbsd-arm64") == "OpenDoctrines-netbsd-arm64.zip", "bsd arm64 keeps its name");
     ok(ureleases::gameAssetName("illumos-x64") == "OpenDoctrines-illumos-amd64.zip", "illumos x64 is amd64");
+    ok(ureleases::gameAssetName("raspios-arm64") == "OpenDoctrines-raspios-arm64.zip", "raspios arm64 is the GLES build");
+    ok(ureleases::gameAssetName("raspios-armhf") == "OpenDoctrines-raspios-armhf.zip", "raspios armhf is the GLES build");
+    ok(ureleases::gameAssetName("haiku-x64") == "OpenDoctrines-haiku-x64.zip", "haiku asset name");
+    ok(ureleases::gameAssetName("serenity-x64") == "OpenDoctrines-serenity-x64.zip", "serenity asset name");
+    // Every asset name the game's release carries (download.html there, with
+    // the server's), sorted into what a launcher installs and what a person
+    // downloads by hand. A new name must never be taken for this machine's.
+    {
+        using K = ureleases::AssetKind;
+        for (const char* n : {"OpenDoctrines-linux-x64.zip", "OpenDoctrines-raspios-arm64.zip", "OpenDoctrines-raspios-armhf.zip",
+                              "OpenDoctrines-haiku-x64.zip", "OpenDoctrines-illumos-amd64.zip", "OpenDoctrines-serenity-x64.zip",
+                              "OpenDoctrines-netbsd-arm64.zip", "OpenDoctrines-windows-x86.zip"})
+            ok(ureleases::assetKind(n) == K::Launchable, n);
+        for (const char* n : {"OpenDoctrines-chromeos-x64.deb", "OpenDoctrines-raspios-armhf.deb", "OpenDoctrines-dos-x86.zip",
+                              "OpenDoctrines-wii-ppc.zip", "OpenDoctrines-vita.vpk", "OpenDoctrines.apk", "OpenDoctrines-freertos.zip",
+                              "open-doctrines-templeos-1.2.zip", "OpenDoctrines-linux-x64.deb"})
+            ok(ureleases::assetKind(n) == K::Manual, n);
+        for (const char* n : {"OpenDoctrinesServer-linux-x64.zip", "SHA256SUMS", "OpenDoctrines-web.zip"})
+            ok(ureleases::assetKind(n) != K::Launchable, n);
+        // This machine's own key is always one the launcher installs.
+        ok(ureleases::assetKind(ureleases::gameAssetName()) == K::Launchable, "this machine's game build is launchable");
+        Release r;
+        for (const char* n : {"OpenDoctrines-dos-x86.zip", "OpenDoctrines-wii-ppc.zip", "OpenDoctrines-linux-x64.zip", "OpenDoctrines-chromeos-x64.deb",
+                              "OpenDoctrines-chromeos-arm64.deb"})
+            r.assets.push_back({n, "", 0, ""});
+        auto m = ureleases::manualBuilds(r);
+        ok(m.size() == 3 && m[0] == "DOS" && m[1] == "Wii" && m[2] == "ChromeOS", "manual builds named once each");
+    }
     // Every machine CI builds on is one the launcher can name. "unknown" here
     // would mean this build installs nothing and can never update itself.
     ok(upaths::platformTag().find("unknown") == std::string::npos, "this machine has a platform tag");

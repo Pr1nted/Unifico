@@ -333,6 +333,10 @@ void Child::stop() {
 void openUrl(const std::string& url) {
 #if defined(__APPLE__)
     spawnDetached("/usr/bin/open", {url});
+#elif defined(__HAIKU__)
+    spawnDetached("/bin/open", {url});       // Haiku's own opener
+#elif defined(__serenity__)
+    spawnDetached("/bin/open", {url});       // SerenityOS's LaunchServer client
 #else
     spawnDetached(which("xdg-open").empty() ? "/usr/bin/xdg-open" : which("xdg-open"), {url});
 #endif

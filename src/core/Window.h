@@ -10,6 +10,14 @@
 namespace uwindow {
 void toggleFullscreen();
 bool isFullscreen();
+/** Shrink the window to 90% of its monitor, keeping its shape, when it opened
+ *  larger than the screen (a Steam Deck's 1280x800 panel, a small laptop),
+ *  and centre it. A window that fits is left alone. The game does the same
+ *  (Open Doctrines' Game::init). */
+void fitToScreen();
+/** Running under gamescope -- a Steam Deck's Game Mode, SteamOS anywhere --
+ *  which shows one window across the whole panel and only ever scales it. */
+bool underGamescope();
 /** True where fullscreen hides the system's own window controls. */
 bool needsOwnControls();
 }

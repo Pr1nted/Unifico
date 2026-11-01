@@ -20,8 +20,9 @@ shift 2
 
 uname -a
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "-DOD_ACHIEVEMENT_KEYS=${OD_ACHIEVEMENT_KEYS:-}" "$@"
-# getconf on Linux-likes, sysctl on the BSDs, psrinfo on illumos.
-jobs=$(getconf NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || psrinfo | wc -l)
+# getconf on Linux-likes, sysctl on the BSDs, psrinfo on illumos, nproc
+# (coreutils) on Haiku; 2 if none answers.
+jobs=$(getconf NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || psrinfo 2>/dev/null | wc -l | grep -v '^ *0$' || nproc 2>/dev/null || echo 2)
 cmake --build build -j $jobs
 cmake --build build --target UnificoTest -j 2
 # With the tag: the launcher must call this platform what it is released as,

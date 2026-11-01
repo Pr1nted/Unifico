@@ -29,6 +29,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "SunOS")
     add_compile_definitions(__EXTENSIONS__)
     link_libraries(socket nsl)
 endif()
+# Haiku keeps the BSD socket API in libnetwork, not libc (as the game links it).
+if(HAIKU)
+    link_libraries(network)
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -87,6 +91,51 @@ set(SUPPORT_FILEFORMAT_GIF OFF CACHE BOOL "" FORCE)
 set(SUPPORT_SCREEN_CAPTURE OFF CACHE BOOL "" FORCE)
 set(SUPPORT_GIF_RECORDING OFF CACHE BOOL "" FORCE)
 set(SUPPORT_TRACELOG ON CACHE BOOL "" FORCE)
+# ---- the window and the renderer, per platform ----
+#
+# THE SAME CHOICES THE GAME MAKES (Open Doctrines' CMakeLists.txt), for the
+# same reasons; see docs/platforms.md.
+#
+#   UNIFICO_GLES      Raspberry Pi OS. raylib on OpenGL ES 2.0 (the game's
+#                     OD_GLES): a Pi 4/5 offers GL 3.1, not the 3.3 raylib's
+#                     desktop default asks for. Also names the platform
+#                     "raspios", so the launcher installs the game's GLES build.
+#   HAIKU             SDL or nothing: GLFW has no Haiku backend. The system's
+#                     SDL3 (pkgman install libsdl3_devel), as the game links it.
+#   SerenityOS        SDL2 (SDL3 has no SerenityOS backend) from SerenityOS's
+#                     own port, and raylib's software renderer rlsw
+#                     (UNIFICO_SOFTWARE_RENDER), because its LibGL has no
+#                     shaders -- the game's OD_SOFTWARE_RENDER.
+#
+# Everywhere else stays on raylib's GLFW backend: the launcher has no use for
+# SDL's touch input, and GLFW is the smaller binary.
+option(UNIFICO_GLES "Build for OpenGL ES 2.0 (Raspberry Pi OS); names the platform raspios-*" OFF)
+if(CMAKE_SYSTEM_NAME STREQUAL "SerenityOS")
+    set(unifico_sw_default ON)
+else()
+    set(unifico_sw_default OFF)
+endif()
+option(UNIFICO_SOFTWARE_RENDER "Render in software (raylib rlsw), with no OpenGL driver; SDL builds only" ${unifico_sw_default})
+if(UNIFICO_GLES)
+    set(OPENGL_VERSION "ES 2.0" CACHE STRING "raylib renderer: OpenGL ES 2.0" FORCE)
+    add_compile_definitions(UNIFICO_GLES=1)
+endif()
+if(UNIFICO_SOFTWARE_RENDER)
+    set(OPENGL_VERSION "Software" CACHE STRING "raylib renderer: rlsw software rasteriser" FORCE)
+endif()
+if(HAIKU)
+    find_package(SDL3 REQUIRED CONFIG)
+    set(PLATFORM "SDL" CACHE STRING "raylib platform: SDL3 (Haiku)" FORCE)
+    message(STATUS "Unifico: raylib on the system SDL3 ${SDL3_VERSION} (Haiku)")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "SerenityOS")
+    find_package(SDL2 REQUIRED CONFIG)
+    if(NOT TARGET SDL2::SDL2 AND TARGET SDL2::SDL2-shared)
+        add_library(SDL2::SDL2 ALIAS SDL2::SDL2-shared)
+    endif()
+    set(PLATFORM "SDL" CACHE STRING "raylib platform: SDL2 (SerenityOS)" FORCE)
+    message(STATUS "Unifico: raylib on the system SDL2 ${SDL2_VERSION} (SerenityOS), renderer ${OPENGL_VERSION}")
+endif()
+
 FetchContent_Declare(raylib
     GIT_REPOSITORY https://github.com/raysan5/raylib.git
     GIT_TAG 6.2

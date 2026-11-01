@@ -17,6 +17,9 @@
 #    include <sys/types.h>
 #    include <sys/sysctl.h>
 #  endif
+#  if defined(__HAIKU__)
+#    include <image.h>
+#  endif
 #endif
 
 namespace fs = std::filesystem;
@@ -98,6 +101,13 @@ std::string selfExe() {
     size_t len = sizeof buf;
     if (sysctl(mib, 4, buf, &len, nullptr, 0) == 0) return buf;
     return {};
+#elif defined(__HAIKU__)
+    // Haiku has no /proc: the first image of the team is the executable.
+    image_info info;
+    int32 cookie = 0;
+    while (get_next_image_info(B_CURRENT_TEAM, &cookie, &info) == B_OK)
+        if (info.type == B_APP_IMAGE) return info.name;
+    return {};
 #elif defined(__sun)
     // illumos: /proc/self/path/a.out is the link /proc/self/exe is elsewhere.
     char buf[PATH_MAX];
@@ -137,6 +147,15 @@ std::string osName() {
     return "netbsd";
 #elif defined(__sun)
     return "illumos";
+#elif defined(__HAIKU__)
+    return "haiku";
+#elif defined(__serenity__)
+    return "serenity";
+#elif defined(__linux__) && defined(UNIFICO_GLES)
+    // The Raspberry Pi OS build (OpenGL ES, -DUNIFICO_GLES=ON), as the game's
+    // OD_GLES build is "raspios": a Pi installs the game's GLES build, never
+    // the desktop-GL Linux one it cannot draw.
+    return "raspios";
 #else
     return "linux";
 #endif
@@ -149,6 +168,10 @@ std::string platformTag() {
     const char* arch = "x64";
 #elif defined(__i386__) || defined(_M_IX86)
     const char* arch = "x86";
+#elif defined(__arm__) && defined(__linux__) && defined(UNIFICO_GLES)
+    // Raspberry Pi OS spells 32-bit Arm the Debian way, as the game does
+    // (OpenDoctrines-raspios-armhf); plain Linux keeps "armv7".
+    const char* arch = "armhf";
 #elif defined(__arm__)
     const char* arch = "armv7";
 #elif defined(__riscv)

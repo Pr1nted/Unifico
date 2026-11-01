@@ -36,6 +36,9 @@ struct Available {
 };
 /** Ask the release list; blocking. False when up to date or unreachable. */
 bool check(Available& out, std::string* error);
+/** True for a package-manager install (a MANAGED file beside the launcher,
+ *  as the .deb installs it): check() then never offers an update. */
+bool managed();
 /** Steps 1-5. On success the caller must quit immediately. */
 JobPtr apply(const Available& a);
 /** Step 6, called from main() when started with --finish-update. Returns the exit code. */
