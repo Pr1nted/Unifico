@@ -29,13 +29,31 @@ ln -s ../lib/unifico/Unifico "$root/usr/bin/Unifico"
 install -m 0644 "$here/packaging/linux/unifico.desktop" "$root/usr/share/applications/unifico.desktop"
 install -m 0644 "$here/packaging/linux/unifico.png" "$root/usr/share/icons/hicolor/256x256/apps/unifico.png"
 size=$(du -sk "$root/usr" | cut -f1)
+# Depends: from what the binary actually links, as the game's
+# make_linux_packages.sh does -- a GLES build (UNIFICO_GLES) links
+# libOpenGL.so.0 where the desktop one dlopens GL, and apt must know.
+deps="libc6, libstdc++6"
+for lib in $(readelf -d "$bin" | sed -n 's/.*Shared library: \[\(.*\)\]/\1/p'); do
+  case "$lib" in
+    libcurl.so.4)     deps="$deps, libcurl4" ;;
+    libX11.so.6)      deps="$deps, libx11-6" ;;
+    libOpenGL.so.0)   deps="$deps, libopengl0" ;;
+    libGL.so.1)       deps="$deps, libgl1" ;;
+    libGLESv2.so.2)   deps="$deps, libgles2" ;;
+    libEGL.so.1)      deps="$deps, libegl1" ;;
+    libSDL3.so.0)     deps="$deps, libsdl3-0" ;;
+    libSDL2-2.0.so.0) deps="$deps, libsdl2-2.0-0" ;;
+  esac
+done
+# GL itself is dlopened by the desktop build: still a runtime need.
+case "$deps" in *libopengl0*|*libgl1*|*libgles2*) ;; *) deps="$deps, libgl1 | libgles2" ;; esac
 cat > "$root/DEBIAN/control" <<CTRL
 Package: unifico
 Version: $ver
 Architecture: $arch
 Maintainer: Open Doctrines <noreply@opendoctrines.pages.dev>
 Installed-Size: $size
-Depends: libc6, libstdc++6, libcurl4, libx11-6, libgl1 | libgles2
+Depends: $deps
 Section: games
 Priority: optional
 Homepage: https://opendoctrines.pages.dev
